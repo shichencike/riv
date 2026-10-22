@@ -1,0 +1,21 @@
+[package]
+name = "riv-cli"
+description = "Command line interface of riv, a distributed version control system"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "riv"
+path = "src/main.rs"
+
+[dependencies]
+riv-core.workspace = true
+riv-diff.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

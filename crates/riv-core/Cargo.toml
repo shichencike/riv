@@ -1,0 +1,21 @@
+[package]
+name = "riv-core"
+description = "Core library of riv: content-addressable object store, index, snapshots, commits, branches"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+riv-diff.workspace = true
+blake3.workspace = true
+rayon.workspace = true
+zstd.workspace = true
+ignore.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,66 @@
+═══ init ═══
+Initialized empty riv repository in /tmp/tmp.2bHDKkwY2z/.riv/
+
+═══ add + status ═══
+A  a.txt
+A  lib/x.rs
+
+═══ commit ═══
+[main (root-commit) 524b052] initial
+ 2 files changed
+
+═══ status clean ═══
+On branch main
+
+nothing to commit, working tree clean
+
+═══ log ═══
+524b052 initial
+
+═══ 分支：创建 / 列表 / 切换 ═══
+Created branch dev at 524b052
+  dev 524b052
+    initial
+* main 524b052
+    initial
+Switched to branch 'dev'
+[dev 8525492] dev change
+ 1 file changed
+Switched to branch 'main'
+main 分支内容: fn main() {}
+
+═══ diff：rev vs 工作区 / 树间 / --cached ═══
+diff --riv a/lib/x.rs b/lib/x.rs
+--- a/lib/x.rs
++++ b/lib/x.rs
+@@ -1 +1 @@
+-fn main() { println!("dev"); }
++fn main() {}
+diff --riv a/lib/x.rs b/lib/x.rs
+--- a/lib/x.rs
++++ b/lib/x.rs
+@@ -1 +1 @@
+-fn main() {}
++fn main() { println!("dev"); }
+diff --riv a/lib/x.rs b/lib/x.rs
+--- a/lib/x.rs
++++ b/lib/x.rs
+@@ -1 +1 @@
+-fn main() {}
++fn main() { /* wip */ }
+
+═══ checkout -- 路径恢复（从索引）═══
+Updated 1 path from the index
+a.txt 恢复为: line1
+
+═══ branch -d（已合并可删）═══
+Created branch merged-candidate at 524b052
+Deleted branch merged-candidate
+
+═══ 错误处理 ═══
+error: invalid revision: unknown revision or path: nope
+error: pathspec did not match any files: ghost.txt
+
+═══ 最终状态 ═══
+M  lib/x.rs
+524b052 initial

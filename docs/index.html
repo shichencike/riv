@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>riv — 分布式版本控制系统 · 使用教程</title>
+<meta name="description" content="riv 是一个用 Rust 编写的分布式版本控制系统，支持 Windows / Linux / macOS / Termux 全平台从源码构建。">
+<style>
+  :root {
+    --bg: #0f1115;
+    --bg-soft: #161a22;
+    --bg-card: #1a1f2b;
+    --border: #2a3140;
+    --text: #dde3ee;
+    --text-dim: #9aa5b8;
+    --accent: #ffb454;
+    --accent-soft: rgba(255, 180, 84, .12);
+    --green: #7bd88f;
+    --blue: #6cb6ff;
+    --purple: #c39bf5;
+    --red: #ff7b72;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 16px; line-height: 1.75;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .layout { display: flex; max-width: 1280px; margin: 0 auto; }
+
+  /* ── 侧边导航 ── */
+  nav {
+    width: 240px; flex-shrink: 0; position: sticky; top: 0;
+    height: 100vh; overflow-y: auto; padding: 32px 16px 48px 24px;
+    border-right: 1px solid var(--border);
+  }
+  nav .brand { font-weight: 700; font-size: 20px; color: var(--accent); margin-bottom: 24px; display: block; }
+  nav .brand small { display: block; font-size: 11px; color: var(--text-dim); font-weight: 400; margin-top: 2px; }
+  nav a {
+    display: block; padding: 6px 10px; margin: 1px 0; border-radius: 6px;
+    color: var(--text-dim); font-size: 14px; border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); background: var(--bg-soft); text-decoration: none; }
+  nav a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); }
+  nav a.sub { padding-left: 26px; font-size: 13px; }
+
+  /* ── 主内容 ── */
+  main { flex: 1; min-width: 0; padding: 40px 48px 96px; }
+  section { margin-bottom: 56px; }
+  h1 { font-size: 34px; line-height: 1.3; margin-bottom: 8px; }
+  h1 .rev { color: var(--accent); }
+  h2 { font-size: 24px; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h2 .num { color: var(--accent); font-family: var(--mono); font-size: 16px; margin-right: 10px; }
+  h3 { font-size: 18px; margin: 28px 0 12px; }
+  h4 { font-size: 15px; margin: 20px 0 8px; color: var(--text); }
+  p { margin: 10px 0; }
+  ul, ol { margin: 10px 0 10px 24px; }
+  li { margin: 4px 0; }
+  code {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--bg-soft); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 4px; color: var(--accent);
+  }
+  pre {
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; overflow-x: auto; margin: 14px 0; line-height: 1.6;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--text); font-size: 13.5px; }
+  pre .c { color: var(--text-dim); }            /* 注释 */
+  pre .p { color: var(--green); }               /* 提示符 */
+  pre .k { color: var(--purple); }              /* 关键字 */
+  pre .s { color: var(--green); }               /* 字符串 */
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-soft); color: var(--accent); font-weight: 600; white-space: nowrap; }
+  td code { white-space: nowrap; }
+
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px 24px; margin: 16px 0;
+  }
+  .grid { display: grid; gap: 16px; }
+  .grid.g3 { grid-template-columns: repeat(3, 1fr); }
+  .grid.g2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 1100px) { .grid.g3 { grid-template-columns: 1fr; } .grid.g2 { grid-template-columns: 1fr; } }
+  .plat { border-top: 3px solid var(--accent); }
+  .plat h4 { margin-top: 0; }
+  .plat .tag { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 28px; }
+  .badge {
+    font-family: var(--mono); font-size: 12.5px; padding: 3px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--bg-soft); color: var(--text-dim);
+  }
+  .badge b { color: var(--green); font-weight: 600; }
+
+  blockquote {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: 10px 18px; margin: 14px 0; border-radius: 0 8px 8px 0; color: var(--text);
+  }
+  .warn { border-left-color: var(--red); background: rgba(255,123,114,.08); }
+
+  .term { font-family: var(--mono); font-size: 13px; color: var(--text-dim); }
+  footer { border-top: 1px solid var(--border); padding-top: 24px; color: var(--text-dim); font-size: 13.5px; }
+
+  @media (max-width: 900px) {
+    .layout { flex-direction: column; }
+    nav { position: static; width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    main { padding: 24px 20px 64px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav id="toc">
+  <a class="brand" href="#top">riv<small>分布式版本控制系统</small></a>
+  <a href="#intro">简介</a>
+  <a href="#build">安装与构建</a>
+  <a class="sub" href="#build-linux">Linux / macOS</a>
+  <a class="sub" href="#build-windows">Windows</a>
+  <a class="sub" href="#build-termux">Termux (Android)</a>
+  <a class="sub" href="#build-verify">构建验证</a>
+  <a href="#quickstart">快速开始</a>
+  <a href="#commands">命令参考</a>
+  <a href="#rivignore">.rivignore</a>
+  <a href="#cross">跨平台一致性</a>
+  <a href="#internals">内部原理</a>
+  <a href="#faq">FAQ</a>
+  <a href="#roadmap">路线图</a>
+</nav>
+
+<main id="top">
+
+<h1><span class="rev">riv</span> — 分布式版本控制系统</h1>
+<p class="term">v0.1.0 · Rust · MIT OR Apache-2.0</p>
+
+<div class="badges">
+  <span class="badge">Linux <b>✓</b></span>
+  <span class="badge">macOS <b>✓</b></span>
+  <span class="badge">Windows <b>✓</b></span>
+  <span class="badge">Termux / Android <b>✓</b></span>
+  <span class="badge">rust-version ≥ 1.85</span>
+  <span class="badge">自有格式 · 不兼容 git</span>
+</div>
+
+<p>
+<strong>riv</strong> 是一个用 Rust 编写的分布式版本控制系统。它实现了与 git 等价的核心工作流
+（<code>init</code> / <code>add</code> / <code>commit</code> / <code>status</code> / <code>log</code> /
+<code>branch</code> / <code>checkout</code> / <code>diff</code>），但采用
+<strong>完全自有的存储格式</strong>——不与 git 互操作，也不背负 git 的历史包袱。
+</p>
+<p>
+riv 的定位是「实际生产力工具」：大文件友好、并行哈希、增量 diff，
+并且<strong>一套代码在 Windows / Linux / macOS / Termux 上行为完全一致</strong>——
+三平台均从源码直接编译，无需任何预编译产物。
+</p>
+
+<!-- ═══════════════ 1. 简介 ═══════════════ -->
+<section id="intro">
+<h2><span class="num">01</span>riv 是什么</h2>
+
+<p>如果你熟悉 git，可以把 riv 理解为「git 核心工作流的极简再实现」：</p>
+
+<table>
+  <tr><th style="width:180px">维度</th><th>riv 的选择</th></tr>
+  <tr><td>存储格式</td><td>自有二进制对象格式（<code>RIVOBJ</code> 帧 + blake3 内容寻址 + zstd 压缩），<strong>不读取也不写入 .git</strong></td></tr>
+  <tr><td>哈希算法</td><td>blake3（并行、快）</td></tr>
+  <tr><td>diff 算法</td><td>Myers O(ND) 线性空间分治，输出对齐 git 的 unified diff</td></tr>
+  <tr><td>忽略规则</td><td><code>.rivignore</code>，语法与 <code>.gitignore</code> 相同</td></tr>
+  <tr><td>分支模型</td><td>轻量分支（纯引用文件）+ 第一父提交历史</td></tr>
+  <tr><td>平台支持</td><td>Windows / Linux / macOS / Termux，同一份源码、同一种构建命令</td></tr>
+</table>
+
+<div class="card">
+<h4>三平台，一种体验</h4>
+<p>riv 在以下平台<strong>使用完全相同的源码和构建命令</strong>（<code>cargo build --release</code>），
+并对平台差异做了显式对齐，保证行为一致：</p>
+<ul>
+  <li><strong>路径分隔符</strong>：Windows 的 <code>\</code> 与 verbatim 路径（<code>\\?\C:\...</code>）在入口统一归一化，仓库内路径一律以 <code>/</code> 表示；</li>
+  <li><strong>执行位</strong>：Windows 无 exec 位，riv 显式忽略它（对齐 git <code>core.filemode=false</code>），避免 Linux 提交的文件在 Windows 上永远显示 modified；</li>
+  <li><strong>符号链接</strong>：Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>）；Unix / Termux 完整支持；</li>
+  <li><strong>编辑器回退</strong>：<code>commit</code> 无 <code>-m</code> 且无 <code>$EDITOR</code> 时，Unix 回退 <code>vi</code>、Windows 回退 <code>notepad</code>；非交互环境明确报错而非挂起。</li>
+</ul>
+</div>
+</section>
+
+<!-- ═══════════════ 2. 安装与构建 ═══════════════ -->
+<section id="build">
+<h2><span class="num">02</span>安装与构建</h2>
+
+<p>riv <strong>不提供预编译二进制</strong>——所有平台统一从源码编译，保证你拿到的就是这份代码本身。
+唯一的前置条件是 Rust 工具链（rust-version ≥ 1.85，推荐使用 rustup 安装稳定版即可）。</p>
+
+<h3 id="build-linux">Linux / macOS</h3>
+<pre><code><span class="c"># 1. 安装 Rust（如已安装可跳过）</span>
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+<span class="c"># 2. 解压源码包并进入目录</span>
+tar xzf riv-0.1.0.tar.gz
+cd riv-0.1.0
+
+<span class="c"># 3. 编译 release 版本</span>
+cargo build --release
+
+<span class="c"># 4. 产物位置（可加入 PATH 或软链到 ~/.local/bin）</span>
+./target/release/riv --help</code></pre>
+
+<h3 id="build-windows">Windows</h3>
+<p>Windows 上推荐两种工具链之一，任选其一即可，构建命令完全相同：</p>
+
+<div class="grid g2">
+<div class="card plat">
+<h4>方案 A：GNU 工具链（MinGW-w64）</h4>
+<p class="term">适合不想装 VS 的场景</p>
+<ol>
+  <li>安装 <a href="https://rustup.rs/">rustup</a>：下载并运行 <code>rustup-init.exe</code></li>
+  <li>安装 <a href="https://www.mingw-w64.org/">MinGW-w64</a>（或通过 MSYS2：<code>pacman -S mingw-w64-ucrt-x86_64-gcc</code>），确保 <code>gcc</code> 在 PATH 中</li>
+  <li>设置默认工具链：<code>rustup default stable-gnu</code></li>
+</ol>
+</div>
+<div class="card plat">
+<h4>方案 B：MSVC 工具链</h4>
+<p class="term">官方默认，需 VS 生成工具</p>
+<ol>
+  <li>安装 rustup（默认即为 <code>stable-msvc</code>）</li>
+  <li>安装 <a href="https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/">VS Build Tools</a>，勾选「使用 C++ 的桌面开发」</li>
+  <li>在「x64 Native Tools 命令提示符」或普通终端中均可直接构建</li>
+</ol>
+</div>
+</div>
+
+<pre><code><span class="c"># 在 PowerShell / CMD 中（任选上述一种工具链后）</span>
+tar xzf riv-0.1.0.tar.gz
+cd riv-0.1.0
+
+cargo build --release
+
+<span class="c">:: 产物：target\release\riv.exe</span>
+.\target\release\riv.exe --help</code></pre>
+
+<blockquote>
+路径分隔符已在内核层处理：Windows 上 <code>riv add .\src</code>、<code>riv add ./src</code>、<code>riv add src</code>
+等价，仓库内路径一律以 <code>/</code> 显示；<code>\\?\C:\...</code> verbatim 路径同样正确解析。
+</blockquote>
+
+<h3 id="build-termux">Termux (Android)</h3>
+<p>Termux 是 Android 上的完整 Linux 环境，riv 可直接在 Termux 中编译运行，无需 root：</p>
+
+<pre><code><span class="c"># 1. 安装 Rust 与 C 工具链（clang 为依赖 crate 所需）</span>
+pkg update
+pkg install rust clang
+
+<span class="c"># 2. 解压源码包（如从其他设备拷贝，放在 $HOME 下，勿放 /sdcard——FAT 无 exec 位）</span>
+tar xzf riv-0.1.0.tar.gz
+cd riv-0.1.0
+
+<span class="c"># 3. 编译（Termux 的 $HOME 位于 ext4/f2fs，exec 位与符号链接均可用，走完整 Unix 语义）</span>
+cargo build --release
+
+./target/release/riv --help</code></pre>
+
+<blockquote class="warn">
+注意：请将仓库放在 <code>$HOME</code>（如 <code>~/projects</code>），不要放在 <code>/sdcard</code>。
+共享存储多为 FAT/exFAT，没有 Unix 权限位，riv 的文件模式语义会退化为 git 的
+<code>core.filemode=false</code> 行为（这是有意为之的安全兜底，不影响仓库正确性）。
+</blockquote>
+
+<h3 id="build-verify">构建验证（可选）</h3>
+<pre><code>cargo fmt --all --check          <span class="c"># 格式干净</span>
+cargo clippy --all-targets       <span class="c"># 零警告</span>
+cargo test                       <span class="c"># 142 个测试全部通过</span></code></pre>
+</section>
+
+<!-- ═══════════════ 3. 快速开始 ═══════════════ -->
+<section id="quickstart">
+<h2><span class="num">03</span>快速开始</h2>
+
+<pre><code><span class="c"># 初始化一个仓库（创建 .riv/ 目录）</span>
+<span class="p">$</span> riv init
+
+<span class="c"># 创建一些文件并暂存</span>
+<span class="p">$</span> printf 'hello\n' &gt; a.txt
+<span class="p">$</span> riv add .
+
+<span class="c"># 查看状态（两列模型 + untracked）</span>
+<span class="p">$</span> riv status
+A  a.txt
+
+<span class="c"># 提交</span>
+<span class="p">$</span> riv commit -m "first commit"
+[main 1a2b3c4d] first commit
+
+<span class="c"># 历史</span>
+<span class="p">$</span> riv log --oneline
+1a2b3c4d first commit
+
+<span class="c"># 分支与切换</span>
+<span class="p">$</span> riv branch feature
+<span class="p">$</span> riv checkout feature
+
+<span class="c"># 查看差异</span>
+<span class="p">$</span> riv diff --stat</code></pre>
+
+<p>完整命令演示可运行包内脚本（Linux/macOS/Termux）：</p>
+<pre><code>./demo.sh ./target/release/riv</code></pre>
+</section>
+
+<!-- ═══════════════ 4. 命令参考 ═══════════════ -->
+<section id="commands">
+<h2><span class="num">04</span>命令参考</h2>
+
+<table>
+  <tr><th style="width:170px">命令</th><th>行为</th></tr>
+  <tr><td><code>riv init</code></td><td>初始化仓库：创建 <code>.riv/</code>（objects/ refs/ index HEAD config）</td></tr>
+  <tr><td><code>riv add [paths]</code></td><td>暂存变更。无参数 = 整个工作区（含删除）；<code>-u</code> 只更新已跟踪文件；<code>-f</code> 强制添加被忽略文件；<code>-n</code> 预览不落盘</td></tr>
+  <tr><td><code>riv commit -m/-F</code></td><td>从索引创建提交。无信息时回退 <code>$EDITOR</code>（非交互环境明确报错而非挂起）；<code>-a</code> 等价先执行 <code>add -u</code></td></tr>
+  <tr><td><code>riv status</code></td><td>两列模型（staged/unstaged）+ untracked；<code>--porcelain</code> 输出机器可读格式</td></tr>
+  <tr><td><code>riv log</code></td><td>第一父提交链。<code>--oneline</code> / <code>-n N</code> / 可带 <code>&lt;rev&gt;</code> 起始点</td></tr>
+  <tr><td><code>riv branch</code></td><td>列表 / 创建 / <code>-d</code> 删除（未合并则拒绝）/ <code>-D</code> 强制删除 / <code>-m</code> 重命名</td></tr>
+  <tr><td><code>riv checkout</code></td><td><code>-b</code> 创建并切换；<code>&lt;branch|rev&gt;</code> 切换（带脏工作区安全检查）；<code>-- &lt;paths&gt;</code> 从索引恢复文件；<code>&lt;rev&gt; -- &lt;paths&gt;</code> 从指定树恢复</td></tr>
+  <tr><td><code>riv diff</code></td><td>默认 index vs 工作区；<code>--cached</code> = HEAD vs 索引；<code>&lt;rev&gt;</code> = rev vs 工作区；<code>&lt;rev1&gt; &lt;rev2&gt;</code> = 树间比较；<code>--stat</code> 只输出统计</td></tr>
+</table>
+
+<h3>修订表达式（revparse）</h3>
+<table>
+  <tr><th>写法</th><th>含义</th></tr>
+  <tr><td><code>HEAD</code></td><td>当前提交</td></tr>
+  <tr><td><code>main</code></td><td>分支名（任意 refs/heads 下的分支）</td></tr>
+  <tr><td><code>1a2b3c4d</code></td><td>oid 前缀（≥ 4 位十六进制，未命中时报 unknown revision or path）</td></tr>
+  <tr><td><code>HEAD^2</code></td><td>第 N 个父提交</td></tr>
+  <tr><td><code>HEAD~3</code></td><td>沿第一父回溯 N 代</td></tr>
+</table>
+</section>
+
+<!-- ═══════════════ 5. .rivignore ═══════════════ -->
+<section id="rivignore">
+<h2><span class="num">05</span>.rivignore</h2>
+
+<p><code>.rivignore</code> 的语法与 <code>.gitignore</code> <strong>完全相同</strong>（底层使用 Rust 生态的
+<code>ignore</code> crate，gitignore 规范第 2 版）：</p>
+
+<pre><code><span class="c"># 忽略编译产物</span>
+/target
+**/*.rs.bk
+
+<span class="c"># 忽略日志但保留 logs 目录本身</span>
+*.log
+!logs/.gitkeep
+
+<span class="c"># 忽略操作系统垃圾</span>
+.DS_Store
+Thumbs.db</code></pre>
+
+<ul>
+  <li>支持仓库根的 <code>.rivignore</code> 与各子目录的局部规则；</li>
+  <li>被忽略文件的变更不会出现在 <code>status</code> / <code>add</code> 中；</li>
+  <li>需要强制添加时使用 <code>riv add -f &lt;path&gt;</code>；</li>
+  <li><code>.riv/</code> 目录自身永远被忽略，无需配置。</li>
+</ul>
+</section>
+
+<!-- ═══════════════ 6. 跨平台一致性 ═══════════════ -->
+<section id="cross">
+<h2><span class="num">06</span>跨平台一致性设计</h2>
+
+<p>「同一份源码、同一种构建命令、同一种体验」不是口号，而是逐项对齐的结果。以下是 riv 处理过的关键平台差异：</p>
+
+<h3>1. 路径分隔符与 Windows verbatim 路径</h3>
+<p>
+Windows 的路径分隔符是 <code>\</code>，且标准库的 <code>fs::canonicalize</code> 会返回
+<code>\\?\C:\...</code> 形式的 verbatim（扩展长度）路径。riv 在仓库入口处统一做两件事：
+</p>
+<ul>
+  <li>把用户输入与 <code>current_dir()</code> 拼成绝对路径后，做<strong>组件级归一化</strong>（剥除 verbatim 前缀时必须按路径组件重建，不能按字符串剥离）；</li>
+  <li>输出到索引、树对象、<code>status</code>、<code>diff</code> 的路径<strong>一律以 <code>/</code> 连接</strong>。</li>
+</ul>
+<p>效果：<code>riv add .\src</code>、<code>riv add src</code>、<code>riv add ./src</code> 在三个平台行为完全一致，
+Windows 上也不会出现 <code>OutsideRepo</code> 误判。</p>
+
+<h3>2. 执行位（exec bit）</h3>
+<p>Unix 用 mode 的最高三位区分普通文件与可执行文件；Windows 没有执行位，<code>file_mode</code> 永远只返回普通文件。
+若逐位比较，Linux 提交的可执行脚本在 Windows 上会被永久判为 modified。riv 的对齐策略（对齐 git <code>core.filemode=false</code>）：</p>
+<ul>
+  <li><strong>Unix</strong>：完整模式语义（普通 / 可执行 / 符号链接）；</li>
+  <li><strong>Windows</strong>：比较时屏蔽 exec 位（<code>(a &amp; !0o111) == (b &amp; !0o111)</code>），杜绝幻影变更。</li>
+</ul>
+
+<h3>3. 符号链接</h3>
+<p>Unix / Termux（<code>$HOME</code> 在 ext4/f2fs）完整支持符号链接的创建、检出与变更检测；
+Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>），不会报错，只是语义降级。</p>
+
+<h3>4. 编辑器与 TTY</h3>
+<p><code>commit</code> 不带 <code>-m</code> 时回退 <code>$EDITOR</code> / <code>$VISUAL</code>；
+两者都未设置时：Unix 回退 <code>vi</code>，Windows 回退 <code>notepad</code>。
+若 stdin 不是终端（如 CI、管道），明确报错并提示使用 <code>-m</code> / <code>-F</code>，绝不挂起。</p>
+
+<h3>验证矩阵</h3>
+<table>
+  <tr><th>平台</th><th>编译</th><th>clippy</th><th>测试</th></tr>
+  <tr><td>Linux x86_64</td><td>✓</td><td>0 警告</td><td>104/104 core + 16 CLI + 24 diff</td></tr>
+  <tr><td>Windows (GNU, wine 运行)</td><td>✓</td><td>0 警告</td><td>104/104 core + CLI 冒烟（含路径分隔符回归）</td></tr>
+  <tr><td>Android aarch64 (NDK r26d 交叉编译)</td><td>✓</td><td>0 警告</td><td>编译级验证（Termux 直接编译同构）</td></tr>
+</table>
+</section>
+
+<!-- ═══════════════ 7. 内部原理 ═══════════════ -->
+<section id="internals">
+<h2><span class="num">07</span>内部原理</h2>
+
+<h3>对象模型</h3>
+<p>所有内容寻址对象共享一个二进制帧：</p>
+<pre><code>RIVOBJ\x01\x00 | type(u8) | payload_len(u64 LE) | payload</code></pre>
+<ul>
+  <li><code>type</code>：<code>1 = blob</code>，<code>2 = tree</code>，<code>3 = commit</code>；</li>
+  <li>对象 id = <code>blake3(完整序列化字节)</code>，即对头部 + 内容整体哈希；</li>
+  <li>payload 经 <strong>zstd</strong> 压缩后按 fan-out 目录（前 2 字节）存放，tmp + rename 原子写入。</li>
+</ul>
+
+<h3>索引与 racy 检查</h3>
+<p>索引（<code>.riv/index</code>）记录每个路径的 <code>oid / mode / size / mtime_sec / mtime_nsec</code>。
+<code>status</code> 与 <code>add</code> 依赖 stat 缓存避免重复读文件；当文件 mtime 秒 ≥ 索引文件自身 mtime 秒时
+（粗粒度时间戳文件系统上的经典竞态），强制重新哈希——与 git 的 racy-clean 检查一致。</p>
+
+<h3>diff：对齐 git xdiff 的 Myers 算法</h3>
+<p><code>riv-diff</code> 实现了 Myers O(ND) 的<strong>线性空间分治</strong>版本，与 git 的 xdiff 同构：</p>
+<ul>
+  <li>每层递归先剥离公共前后缀，空维直接返回；</li>
+  <li>前向 / 后向搜索<strong>边界首次重叠时的空蛇</strong>作为分裂点；</li>
+  <li>进度保证：剥离后 D ≥ 2，递归必然收敛；</li>
+  <li>成本安全阀 <code>max(256, sqrt(n+m))</code>：差异极大时退化为合法但非最小的编辑脚本（与 git 的 mxcost 行为一致）。</li>
+</ul>
+<p>输出为 git 风格 unified diff（<code>--- a/x</code> / <code>+++ b/x</code> / <code>@@</code> hunk），hunk 内稳定遵循「先删后增」。</p>
+
+<h3>性能取向</h3>
+<ul>
+  <li><strong>并行哈希</strong>：<code>add</code> 用 rayon 并行处理文件，大文件（≥ 1MB）走 mmap 零拷贝；</li>
+  <li><strong>流式写入</strong>：blob 经 zstd Encoder 边算边写，内存占用与文件大小无关；</li>
+  <li><strong>增量 status</strong>：只重算 stat 缓存失效的路径。</li>
+</ul>
+
+<h3>项目结构</h3>
+<pre><code>crates/
+  riv-diff/    Myers O(ND) 线性空间 diff（零依赖，可独立使用）
+  riv-core/    对象库、索引、引用、快照、状态、检出、日志、分支
+  riv-cli/     clap 命令行界面</code></pre>
+</section>
+
+<!-- ═══════════════ 8. FAQ ═══════════════ -->
+<section id="faq">
+<h2><span class="num">08</span>FAQ</h2>
+
+<h4>riv 和 git 是什么关系？能读 .git 仓库吗？</h4>
+<p>没有关系，也不能。riv 使用完全自有的存储格式（<code>.riv/</code> 目录、RIVOBJ 对象帧、blake3 哈希），
+既不读取也不写入 git 的任何文件。你可以理解为「同一工作流哲学的另一个实现」。</p>
+
+<h4>为什么压缩包里没有可执行文件？</h4>
+<p>riv 以「代码本身可移植」为分发原则：Windows / Linux / macOS / Termux 使用同一份源码、
+同一条命令 <code>cargo build --release</code> 构建。这样每个平台拿到的都是针对本机优化的产物，
+也避免预编译二进制被质疑「只是打包好的东西支持」。</p>
+
+<h4>Windows 上 <code>riv add .\src</code> 能用吗？</h4>
+<p>能。反斜杠、正斜杠、相对路径、绝对路径、verbatim 路径（<code>\\?\C:\...</code>）在入口全部归一化，
+行为与 Linux 一致。这是内核层的修复，不是 CLI 层的补丁。</p>
+
+<h4>为什么 Windows 上可执行文件的状态不显示 modified？</h4>
+<p>这是有意对齐 git <code>core.filemode=false</code>：Windows 没有执行位，逐位比较会把 Linux 提交的
+可执行文件永久判为脏。riv 在非 Unix 平台上显式忽略 exec 位。</p>
+
+<h4>Termux 里编译要装什么？</h4>
+<p><code>pkg install rust clang</code>，然后 <code>cargo build --release</code>。注意仓库放在 <code>$HOME</code>
+（ext4/f2fs，有完整权限位），不要放 <code>/sdcard</code>（FAT/exFAT 无权限位）。</p>
+
+<h4>支持远程仓库吗？</h4>
+<p>0.1.0 聚焦本地核心工作流。远程协议（fetch/push/pull）在路线图上，见下节。</p>
+
+<h4> riv 的文件都存在哪里？</h4>
+<ul>
+  <li>对象库：<code>.riv/objects/</code>（zstd 压缩 + fan-out 目录，tmp+rename 原子写入）；</li>
+  <li>索引：<code>.riv/index</code>；</li>
+  <li>引用与 HEAD：<code>.riv/refs/</code>、<code>.riv/HEAD</code>；</li>
+  <li>配置：<code>.riv/config</code>。</li>
+</ul>
+<p>卸载 riv = 删除二进制 + 删除项目里的 <code>.riv/</code> 目录，不留任何全局状态。</p>
+
+<h4>许可证？</h4>
+<p>MIT OR Apache-2.0 双许可。</p>
+</section>
+
+<!-- ═══════════════ 9. 路线图 ═══════════════ -->
+<section id="roadmap">
+<h2><span class="num">09</span>路线图</h2>
+<p>0.1.0 已实现本地核心工作流。<strong>尚未实现</strong>：</p>
+<ul>
+  <li>远程协议（fetch / push / pull）；</li>
+  <li>合并（merge）与三方合并；</li>
+  <li>对象库垃圾回收；</li>
+  <li><code>stash</code>；</li>
+  <li>交互式 add。</li>
+</ul>
+</section>
+
+<footer>
+  <p>riv v0.1.0 · 用 Rust 编写 · MIT OR Apache-2.0 双许可 · 本页面为离线单文件文档，可直接双击打开或随压缩包分发。</p>
+</footer>
+
+</main>
+</div>
+
+<script>
+// 滚动高亮当前章节
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a[href^="#"]'));
+  var map = {};
+  links.forEach(function (a) {
+    var el = document.getElementById(a.getAttribute('href').slice(1));
+    if (el) map[a.getAttribute('href').slice(1)] = a;
+  });
+  function onScroll() {
+    var current = null;
+    Object.keys(map).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el && el.getBoundingClientRect().top <= 80) current = id;
+    });
+    links.forEach(function (a) { a.classList.remove('active'); });
+    if (current && map[current]) map[current].classList.add('active');
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+</body>
+</html>

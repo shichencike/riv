@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/riv-diff", "crates/riv-core", "crates/riv-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+authors = ["riv contributors"]
+license = "MIT OR Apache-2.0"
+description = "riv - a fast, distributed version control system written in Rust"
+repository = "https://github.com/riv-vcs/riv"
+
+[workspace.dependencies]
+riv-diff = { path = "crates/riv-diff", version = "0.1.0" }
+riv-core = { path = "crates/riv-core", version = "0.1.0" }
+blake3 = { version = "1", features = ["mmap"] }
+rayon = "1"
+zstd = "0.13"
+ignore = "0.4"
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
