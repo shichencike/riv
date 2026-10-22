@@ -175,6 +175,11 @@ cargo test           # 144 个测试全部通过
 
 代码质量：`cargo clippy --all-targets` 零警告，`cargo fmt --check` 干净。
 
+## 许可证
+
+双许可：[MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE)，与 `Cargo.toml` 中
+`license = "MIT OR Apache-2.0"` 一致，可任选其一使用。
+
 ## 当前范围与后续
 
 已实现本地核心工作流。**尚未实现**：远程协议（fetch/push/pull）、
