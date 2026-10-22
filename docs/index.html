@@ -129,6 +129,7 @@
   <a class="sub" href="#build-verify">构建验证</a>
   <a href="#quickstart">快速开始</a>
   <a href="#commands">命令参考</a>
+  <a href="#auth">Token 管理</a>
   <a href="#rivignore">.rivignore</a>
   <a href="#cross">跨平台一致性</a>
   <a href="#internals">内部原理</a>
@@ -139,7 +140,7 @@
 <main id="top">
 
 <h1><span class="rev">riv</span> — 分布式版本控制系统</h1>
-<p class="term">v0.1.0 · Rust · MIT OR Apache-2.0</p>
+<p class="term">v0.2.0 · Rust · MIT OR Apache-2.0</p>
 
 <div class="badges">
   <span class="badge">Linux <b>✓</b></span>
@@ -204,8 +205,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
 <span class="c"># 2. 解压源码包并进入目录</span>
-tar xzf riv-0.1.0.tar.gz
-cd riv-0.1.0
+tar xzf riv-0.2.0.tar.gz
+cd riv-0.2.0
 
 <span class="c"># 3. 编译 release 版本</span>
 cargo build --release
@@ -238,8 +239,8 @@ cargo build --release
 </div>
 
 <pre><code><span class="c"># 在 PowerShell / CMD 中（任选上述一种工具链后）</span>
-tar xzf riv-0.1.0.tar.gz
-cd riv-0.1.0
+tar xzf riv-0.2.0.tar.gz
+cd riv-0.2.0
 
 cargo build --release
 
@@ -259,8 +260,8 @@ pkg update
 pkg install rust clang
 
 <span class="c"># 2. 解压源码包（如从其他设备拷贝，放在 $HOME 下，勿放 /sdcard——FAT 无 exec 位）</span>
-tar xzf riv-0.1.0.tar.gz
-cd riv-0.1.0
+tar xzf riv-0.2.0.tar.gz
+cd riv-0.2.0
 
 <span class="c"># 3. 编译（Termux 的 $HOME 位于 ext4/f2fs，exec 位与符号链接均可用，走完整 Unix 语义）</span>
 cargo build --release
@@ -276,7 +277,7 @@ cargo build --release
 <h3 id="build-verify">构建验证（可选）</h3>
 <pre><code>cargo fmt --all --check          <span class="c"># 格式干净</span>
 cargo clippy --all-targets       <span class="c"># 零警告</span>
-cargo test                       <span class="c"># 142 个测试全部通过</span></code></pre>
+cargo test                       <span class="c"># 167 个测试全部通过</span></code></pre>
 </section>
 
 <!-- ═══════════════ 3. 快速开始 ═══════════════ -->
@@ -327,6 +328,7 @@ A  a.txt
   <tr><td><code>riv branch</code></td><td>列表 / 创建 / <code>-d</code> 删除（未合并则拒绝）/ <code>-D</code> 强制删除 / <code>-m</code> 重命名</td></tr>
   <tr><td><code>riv checkout</code></td><td><code>-b</code> 创建并切换；<code>&lt;branch|rev&gt;</code> 切换（带脏工作区安全检查）；<code>-- &lt;paths&gt;</code> 从索引恢复文件；<code>&lt;rev&gt; -- &lt;paths&gt;</code> 从指定树恢复</td></tr>
   <tr><td><code>riv diff</code></td><td>默认 index vs 工作区；<code>--cached</code> = HEAD vs 索引；<code>&lt;rev&gt;</code> = rev vs 工作区；<code>&lt;rev1&gt; &lt;rev2&gt;</code> = 树间比较；<code>--stat</code> 只输出统计</td></tr>
+  <tr><td><code>riv auth</code></td><td><code>login</code> 隐藏输入并保存 token / <code>status</code> 查看三来源状态 / <code>logout</code> 清除；均支持 <code>--host</code>（详见下节）</td></tr>
 </table>
 
 <h3>修订表达式（revparse）</h3>
@@ -340,9 +342,61 @@ A  a.txt
 </table>
 </section>
 
-<!-- ═══════════════ 5. .rivignore ═══════════════ -->
+<!-- ═══════════════ 5. Token 管理 ═══════════════ -->
+<section id="auth">
+<h2><span class="num">05</span>Token 管理（riv auth）</h2>
+
+<p>riv 连接远程时需要身份凭证。<code>riv auth</code> 是 riv 的「token 保险柜」，
+按优先级从高到低读取：</p>
+
+<table>
+  <tr><th>优先级</th><th>来源</th><th>适用场景</th></tr>
+  <tr><td>1</td><td>环境变量 <code>RIV_TOKEN</code></td><td>CI/CD 与临时覆盖：不落盘、用即焚</td></tr>
+  <tr><td>2</td><td>系统钥匙串</td><td>Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service</td></tr>
+  <tr><td>3</td><td>本地文件 <code>~/.config/riv/credentials</code></td><td>Termux 等无 DBus 的环境（Unix 权限 600）</td></tr>
+</table>
+
+<h3>登录</h3>
+<pre><code><span class="p">$</span> riv auth login
+Token for github.com (input hidden): <span class="c"># 输入时屏幕不回显</span>
+Token for github.com saved to system keyring.</code></pre>
+<p>在 Termux 等没有钥匙串的环境会自动降级到本地文件：</p>
+<pre><code><span class="p">$</span> riv auth login
+Token for github.com (from stdin):
+System keyring unavailable; token for github.com saved to ~/.config/riv/credentials (mode 600).</code></pre>
+
+<h3>查看状态</h3>
+<pre><code><span class="p">$</span> riv auth status
+Token status for github.com:
+  environment variable RIV_TOKEN       not set
+  system keyring                       set (ghp_****wxyz)
+  credentials file (~/.config/riv/credentials) not set
+
+Effective token: ghp_****wxyz (from system keyring)</code></pre>
+<p>token 一律脱敏展示（保留前 4 后 4 个字符）；日志与错误输出中的 Authorization 头同样打码。</p>
+
+<h3>清除</h3>
+<pre><code><span class="p">$</span> riv auth logout
+Removed token for github.com from: system keyring.</code></pre>
+<p>环境变量属于父 shell，riv 无权清除，logout 会提示你手动 <code>unset RIV_TOKEN</code>。</p>
+
+<h3>CI/CD 用法</h3>
+<pre><code><span class="c"># GitHub Actions：优先读环境变量，不落盘</span>
+- name: Push with riv
+  env:
+    RIV_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: riv push origin main</code></pre>
+
+<h3>自定义主机</h3>
+<p>默认主机为 GitHub 预设（<code>https://github.com</code>），可用 <code>RIV_BASE_URL</code>
+环境变量或 <code>--host</code> 参数覆盖，指向任意 riv 远程（结构通用，不绑死 GitHub）：</p>
+<pre><code><span class="p">$</span> riv auth login --host https://git.example.com:8443
+<span class="p">$</span> riv auth status --host git.example.com:8443</code></pre>
+</section>
+
+<!-- ═══════════════ 6. .rivignore ═══════════════ -->
 <section id="rivignore">
-<h2><span class="num">05</span>.rivignore</h2>
+<h2><span class="num">06</span>.rivignore</h2>
 
 <p><code>.rivignore</code> 的语法与 <code>.gitignore</code> <strong>完全相同</strong>（底层使用 Rust 生态的
 <code>ignore</code> crate，gitignore 规范第 2 版）：</p>
@@ -369,7 +423,7 @@ Thumbs.db</code></pre>
 
 <!-- ═══════════════ 6. 跨平台一致性 ═══════════════ -->
 <section id="cross">
-<h2><span class="num">06</span>跨平台一致性设计</h2>
+<h2><span class="num">07</span>跨平台一致性设计</h2>
 
 <p>「同一份源码、同一种构建命令、同一种体验」不是口号，而是逐项对齐的结果。以下是 riv 处理过的关键平台差异：</p>
 
@@ -402,18 +456,27 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 两者都未设置时：Unix 回退 <code>vi</code>，Windows 回退 <code>notepad</code>。
 若 stdin 不是终端（如 CI、管道），明确报错并提示使用 <code>-m</code> / <code>-F</code>，绝不挂起。</p>
 
+<h3>5. Token 存储</h3>
+<p><code>riv auth</code> 的三级存储在各类平台上都可用，只是后端不同：</p>
+<ul>
+  <li><strong>环境变量</strong>：<code>RIV_TOKEN</code> 全平台一致，优先级最高（CI 首选）；</li>
+  <li><strong>系统钥匙串</strong>：macOS Keychain、Windows 凭据管理器、Linux Secret Service（经 DBus）；</li>
+  <li><strong>文件回退</strong>：无 DBus 的环境（如 Termux、极简桌面）钥匙串不可用时自动降级到
+  <code>~/.config/riv/credentials</code>（chmod 600），流程不中断、不报错。</li>
+</ul>
+
 <h3>验证矩阵</h3>
 <table>
   <tr><th>平台</th><th>编译</th><th>clippy</th><th>测试</th></tr>
-  <tr><td>Linux x86_64</td><td>✓</td><td>0 警告</td><td>104/104 core + 16 CLI + 24 diff</td></tr>
-  <tr><td>Windows (GNU, wine 运行)</td><td>✓</td><td>0 警告</td><td>104/104 core + CLI 冒烟（含路径分隔符回归）</td></tr>
+  <tr><td>Linux x86_64</td><td>✓</td><td>0 警告</td><td>全部通过（167 个：core 122 + CLI 21 + diff 24）</td></tr>
+  <tr><td>Windows (GNU, wine 运行)</td><td>✓</td><td>0 警告</td><td>core 118/118 + CLI 21/21（Unix 专属测试按设计排除；Windows 凭据管理器真实生效）</td></tr>
   <tr><td>Android aarch64 (NDK r26d 交叉编译)</td><td>✓</td><td>0 警告</td><td>编译级验证（Termux 直接编译同构）</td></tr>
 </table>
 </section>
 
 <!-- ═══════════════ 7. 内部原理 ═══════════════ -->
 <section id="internals">
-<h2><span class="num">07</span>内部原理</h2>
+<h2><span class="num">08</span>内部原理</h2>
 
 <h3>对象模型</h3>
 <p>所有内容寻址对象共享一个二进制帧：</p>
@@ -449,13 +512,13 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 <h3>项目结构</h3>
 <pre><code>crates/
   riv-diff/    Myers O(ND) 线性空间 diff（零依赖，可独立使用）
-  riv-core/    对象库、索引、引用、快照、状态、检出、日志、分支
+  riv-core/    对象库、索引、引用、快照、状态、检出、日志、分支、凭证
   riv-cli/     clap 命令行界面</code></pre>
 </section>
 
 <!-- ═══════════════ 8. FAQ ═══════════════ -->
 <section id="faq">
-<h2><span class="num">08</span>FAQ</h2>
+<h2><span class="num">09</span>FAQ</h2>
 
 <h4>riv 和 git 是什么关系？能读 .git 仓库吗？</h4>
 <p>没有关系，也不能。riv 使用完全自有的存储格式（<code>.riv/</code> 目录、RIVOBJ 对象帧、blake3 哈希），
@@ -479,7 +542,8 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 （ext4/f2fs，有完整权限位），不要放 <code>/sdcard</code>（FAT/exFAT 无权限位）。</p>
 
 <h4>支持远程仓库吗？</h4>
-<p>0.1.0 聚焦本地核心工作流。远程协议（fetch/push/pull）在路线图上，见下节。</p>
+<p>0.2.0 已内置 <strong>token 凭证管理层</strong>（<code>riv auth login/status/logout</code>，环境变量 &gt;
+系统钥匙串 &gt; 本地文件三级存储），远程协议本身（fetch/push/pull）在路线图上，见下节。</p>
 
 <h4> riv 的文件都存在哪里？</h4>
 <ul>
@@ -496,8 +560,8 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 
 <!-- ═══════════════ 9. 路线图 ═══════════════ -->
 <section id="roadmap">
-<h2><span class="num">09</span>路线图</h2>
-<p>0.1.0 已实现本地核心工作流。<strong>尚未实现</strong>：</p>
+<h2><span class="num">10</span>路线图</h2>
+<p>0.2.0 已实现本地核心工作流。<strong>尚未实现</strong>：</p>
 <ul>
   <li>远程协议（fetch / push / pull）；</li>
   <li>合并（merge）与三方合并；</li>
@@ -508,7 +572,7 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 </section>
 
 <footer>
-  <p>riv v0.1.0 · 用 Rust 编写 · MIT OR Apache-2.0 双许可 · 本页面为离线单文件文档，可直接双击打开或随压缩包分发。</p>
+  <p>riv v0.2.0 · 用 Rust 编写 · MIT OR Apache-2.0 双许可 · 本页面为离线单文件文档，可直接双击打开或随压缩包分发。</p>
 </footer>
 
 </main>

@@ -186,21 +186,28 @@ fn commit_message_from_file_and_editor_fallback() {
     write(dir, "b.txt", "b\n");
     ok(dir, &["add", "b.txt"]);
 
-    // EDITOR 指向一个不修改文件的命令 → 信息为空 → 拒绝提交
-    let e = err_env(
-        dir,
-        &["commit"],
-        &[("EDITOR", Some("true")), ("VISUAL", None)],
-    );
-    assert!(e.contains("empty commit message"), "{e}");
+    // EDITOR 回退路径（stdin 已置为 null，任何情况下都不会挂起）。
+    // 注：Unix 用 true/false 这两个空操作程序验证「空信息拒绝」与
+    // 「编辑器失败传播」；Windows 没有等价的内置非 GUI 程序
+    // （notepad 会弹窗，无头环境无法驱动），这两个子用例仅在 Unix 类平台运行。
+    #[cfg(unix)]
+    {
+        // EDITOR 指向一个不修改文件的命令 → 信息为空 → 拒绝提交
+        let e = err_env(
+            dir,
+            &["commit"],
+            &[("EDITOR", Some("true")), ("VISUAL", None)],
+        );
+        assert!(e.contains("empty commit message"), "{e}");
 
-    // EDITOR 退出非零 → 报告编辑器失败
-    let e = err_env(
-        dir,
-        &["commit"],
-        &[("EDITOR", Some("false")), ("VISUAL", None)],
-    );
-    assert!(e.contains("editor"), "{e}");
+        // EDITOR 退出非零 → 报告编辑器失败
+        let e = err_env(
+            dir,
+            &["commit"],
+            &[("EDITOR", Some("false")), ("VISUAL", None)],
+        );
+        assert!(e.contains("editor"), "{e}");
+    }
 
     // 无 EDITOR/VISUAL 且 stdin 非终端 → 明确指引 -m/-F，而不是挂起
     let e = err_env(dir, &["commit"], &[("EDITOR", None), ("VISUAL", None)]);
@@ -578,4 +585,209 @@ fn unknown_revision_and_ambiguous_prefix_fail() {
 
     let e = err(dir, &["checkout", "deadbeef"]);
     assert!(e.contains("unknown revision"), "{e}");
+}
+
+// ---------------------------------------------------------------------------
+// auth（token 凭证管理）
+// ---------------------------------------------------------------------------
+
+/// auth 测试专用执行器：隔离配置目录（HOME/XDG/APPDATA/USERPROFILE），
+/// 默认移除 RIV_TOKEN / RIV_BASE_URL，可选从 stdin 喂入 token。
+///
+/// 注意：各 auth 测试使用**互不重复的主机名**——Windows 下 dirs 走 KnownFolder
+/// 而非 HOME 环境变量，配置目录可能落到真实用户目录，唯一主机名保证并行测试
+/// 互不干扰；断言也只依赖 status 输出，不依赖具体存储后端（钥匙串或文件）。
+fn riv_auth(
+    home: &Path,
+    args: &[&str],
+    input: Option<&str>,
+    extra: &[(&str, Option<&str>)],
+) -> Output {
+    let mut cmd = Command::new(RIV);
+    cmd.args(args).current_dir(home);
+    cmd.env("HOME", home);
+    cmd.env("XDG_CONFIG_HOME", home.join(".config"));
+    cmd.env("APPDATA", home.join("AppData").join("Roaming"));
+    cmd.env("USERPROFILE", home);
+    cmd.env_remove("RIV_TOKEN");
+    cmd.env_remove("RIV_BASE_URL");
+    for (k, v) in extra {
+        match v {
+            Some(val) => {
+                cmd.env(k, val);
+            }
+            None => {
+                cmd.env_remove(k);
+            }
+        }
+    }
+    if input.is_some() {
+        cmd.stdin(std::process::Stdio::piped());
+    } else {
+        cmd.stdin(std::process::Stdio::null());
+    }
+    // wait_with_output 只收集已存在的管道：stdout/stderr 必须显式 piped，
+    // 否则默认 inherit，输出会漏到测试进程的控制台而 out.stdout 为空
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().expect("failed to spawn riv");
+    if let Some(input) = input {
+        use std::io::Write as _;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin not piped")
+            .write_all(input.as_bytes())
+            .expect("failed to write stdin");
+    }
+    drop(child.stdin.take());
+    child.wait_with_output().expect("failed to wait riv")
+}
+
+/// auth 执行并断言成功，返回 stdout。
+fn auth_ok(home: &Path, args: &[&str], input: Option<&str>) -> String {
+    let out = riv_auth(home, args, input, &[]);
+    assert!(
+        out.status.success(),
+        "riv {:?} 失败: {}",
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// 完整流程：login（默认主机 github.com）→ status → logout → status。
+/// 唯一使用默认主机的测试，其余 auth 测试一律用唯一主机名。
+#[test]
+fn auth_full_flow_default_host() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path();
+
+    // login：token 经管道喂入（非 TTY 路径），落钥匙串或文件（后端无关）
+    let out = auth_ok(home, &["auth", "login"], Some("ghp_abcdefgh123456\n"));
+    assert!(out.contains("Token for github.com"), "got: {out}");
+    assert!(out.contains("saved to"), "got: {out}");
+
+    // status：脱敏展示 + 生效项
+    let st = auth_ok(home, &["auth", "status"], None);
+    assert!(st.contains("Token status for github.com:"), "got: {st}");
+    assert!(st.contains("ghp_****3456"), "got: {st}");
+    assert!(st.contains("Effective token"), "got: {st}");
+
+    // logout：清除后 status 显示未配置；重复 logout 无保存凭证
+    let out = auth_ok(home, &["auth", "logout"], None);
+    assert!(
+        out.contains("Removed token for github.com from:"),
+        "got: {out}"
+    );
+    let st = auth_ok(home, &["auth", "status"], None);
+    assert!(st.contains("No token configured"), "got: {st}");
+    let out = auth_ok(home, &["auth", "logout"], None);
+    assert!(out.contains("No saved token found"), "got: {out}");
+}
+
+#[test]
+fn auth_env_token_takes_precedence() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path();
+    // 唯一主机：Windows 下配置目录/钥匙串是进程间共享的（dirs 走 KnownFolder，
+    // 不认 HOME 环境变量），唯一主机名保证并行测试互不干扰
+    auth_ok(
+        home,
+        &["auth", "login", "--host", "auth-env-precedence.example.com"],
+        Some("ghp_filetoken9999\n"),
+    );
+    let out = riv_auth(
+        home,
+        &[
+            "auth",
+            "status",
+            "--host",
+            "auth-env-precedence.example.com",
+        ],
+        None,
+        &[("RIV_TOKEN", Some("ghp_envtoken12345"))],
+    );
+    let so = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        so.contains("from environment variable RIV_TOKEN"),
+        "got: {so}"
+    );
+    assert!(so.contains("ghp_****2345"), "got: {so}");
+    // 清理钥匙串/文件中的条目（真实 Windows 上这是共享的系统存储）
+    auth_ok(
+        home,
+        &[
+            "auth",
+            "logout",
+            "--host",
+            "auth-env-precedence.example.com",
+        ],
+        None,
+    );
+}
+
+#[test]
+fn auth_custom_host_isolated() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path();
+    // --host 接受完整 base_url，归一化为主机名（含端口）
+    let out = auth_ok(
+        home,
+        &["auth", "login", "--host", "https://git.example.com:8443"],
+        Some("tok8443\n"),
+    );
+    assert!(out.contains("git.example.com:8443"), "got: {out}");
+    let st = auth_ok(
+        home,
+        &["auth", "status", "--host", "git.example.com:8443"],
+        None,
+    );
+    assert!(
+        st.contains("Token status for git.example.com:8443:"),
+        "got: {st}"
+    );
+    assert!(st.contains("Effective token"), "got: {st}");
+    // 另一个主机不受影响（隔离性；不用默认主机，避免与并行测试共享 github.com）
+    let st2 = auth_ok(
+        home,
+        &["auth", "status", "--host", "other-isolated.example.org"],
+        None,
+    );
+    assert!(st2.contains("No token configured"), "got: {st2}");
+    // 清理钥匙串/文件中的条目（真实 Windows 上这是共享的系统存储）
+    auth_ok(
+        home,
+        &["auth", "logout", "--host", "git.example.com:8443"],
+        None,
+    );
+}
+
+#[test]
+fn auth_login_empty_token_fails() {
+    let tmp = TempDir::new().unwrap();
+    let out = riv_auth(tmp.path(), &["auth", "login"], Some("\n"), &[]);
+    assert!(!out.status.success(), "空 token 不应成功");
+    let se = String::from_utf8_lossy(&out.stderr);
+    assert!(se.contains("token must not be empty"), "got: {se}");
+}
+
+#[test]
+fn auth_logout_notes_unsettable_env() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path();
+    auth_ok(
+        home,
+        &["auth", "login", "--host", "auth-logout-env.example.com"],
+        Some("ghp_envnote12345\n"),
+    );
+    // logout 时环境里仍有 RIV_TOKEN：必须提示用户自行 unset
+    let out = riv_auth(
+        home,
+        &["auth", "logout", "--host", "auth-logout-env.example.com"],
+        None,
+        &[("RIV_TOKEN", Some("ghp_fromenv12345"))],
+    );
+    let so = String::from_utf8_lossy(&out.stdout);
+    assert!(so.contains("unset RIV_TOKEN"), "got: {so}");
 }

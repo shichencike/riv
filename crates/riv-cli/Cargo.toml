@@ -16,6 +16,7 @@ path = "src/main.rs"
 riv-core.workspace = true
 riv-diff.workspace = true
 clap.workspace = true
+rpassword.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

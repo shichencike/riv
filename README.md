@@ -72,13 +72,14 @@ racy-clean 检查一致。
 | 执行位 | Windows 无 exec 位，非 Unix 平台显式忽略 exec 位（`(a & !0o111) == (b & !0o111)`），对齐 git `core.filemode=false`，杜绝 Linux 提交的可执行文件在 Windows 上永久显示 modified |
 | 符号链接 | Unix / Termux 完整支持；Windows 回退为普通文件，对齐 git `core.symlinks=false` |
 | 编辑器回退 | `commit` 无 `-m` 且无 `$EDITOR`/`$VISUAL`：Unix 回退 `vi`，Windows 回退 `notepad`；stdin 非 TTY 时明确报错指引 `-m/-F`，绝不挂起 |
+| Token 存储 | 环境变量 > 系统钥匙串（macOS Keychain / Windows 凭据管理器 / Linux Secret Service）> 文件 `~/.config/riv/credentials`（chmod 600）；无 DBus 的 Termux 自动降级到文件层，流程不中断 |
 
 验证矩阵：
 
 | 平台 | 编译 | clippy | 测试 |
 |---|---|---|---|
-| Linux x86_64 | ✓ | 0 警告 | 全部通过 |
-| Windows（GNU，wine 运行） | ✓ | 0 警告 | core 全过 + CLI 冒烟（含路径分隔符回归） |
+| Linux x86_64 | ✓ | 0 警告 | 全部通过（167 个：core 122 + CLI 21 + diff 24） |
+| Windows（GNU，wine 运行） | ✓ | 0 警告 | core 118/118 + CLI 21/21（Unix 专属测试按设计排除；Windows 凭据管理器真实生效） |
 | Android aarch64（NDK 交叉编译） | ✓ | 0 警告 | 编译级验证（Termux 直接编译同构） |
 
 ## 安装与构建
@@ -90,8 +91,8 @@ riv **不提供预编译二进制**——所有平台使用同一份源码、同
 ### Linux / macOS
 
 ```bash
-tar xzf riv-0.1.0.tar.gz
-cd riv-0.1.0
+tar xzf riv-0.2.0.tar.gz
+cd riv-0.2.0
 cargo build --release        # 产物：target/release/riv
 ```
 
@@ -100,8 +101,8 @@ cargo build --release        # 产物：target/release/riv
 安装 Rust（rustup）+ 任一工具链（MinGW-w64 或 MSVC Build Tools），然后：
 
 ```powershell
-tar xzf riv-0.1.0.tar.gz
-cd riv-0.1.0
+tar xzf riv-0.2.0.tar.gz
+cd riv-0.2.0
 cargo build --release        # 产物：target\release\riv.exe
 ```
 
@@ -109,8 +110,8 @@ cargo build --release        # 产物：target\release\riv.exe
 
 ```bash
 pkg update && pkg install rust clang
-tar xzf riv-0.1.0.tar.gz
-cd riv-0.1.0
+tar xzf riv-0.2.0.tar.gz
+cd riv-0.2.0
 cargo build --release        # 产物：target/release/riv
 ```
 
@@ -150,6 +151,29 @@ riv diff --stat              # 工作区 vs 索引统计
 | `riv branch` | 列表 / 创建 / `-d`（未合并拒绝）/ `-D` / `-m` 重命名 |
 | `riv checkout` | `-b` 创建切换；`<branch|rev>` 切换（脏工作区安全检查）；`-- <paths>` 从索引恢复；`<rev> -- <paths>` 从树恢复 |
 | `riv diff` | 默认 index vs 工作区；`--cached` = HEAD vs 索引；`<rev>` = rev vs 工作区；`<rev1> <rev2>` = 树间比；`--stat` |
+| `riv auth` | `login` 隐藏输入并保存 token / `status` 三来源状态 / `logout` 清除；均支持 `--host` |
+
+## Token 凭证管理（riv auth）
+
+riv 连接远程时需要身份凭证。`riv auth` 按优先级从高到低读取：
+
+1. **环境变量 `RIV_TOKEN`**：CI/CD 与临时覆盖首选，不落盘、用即焚；
+2. **系统钥匙串**：Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service；
+3. **本地文件** `<config_dir>/riv/credentials`（Unix 权限 600）：Termux 等无 DBus
+   的环境自动降级到此。
+
+默认主机为 GitHub 预设（`https://github.com`），可用 `RIV_BASE_URL` 或 `--host`
+覆盖；内部按主机名寻址（含端口），同一套机制将来到任意 riv 远程都可复用。
+
+```bash
+riv auth login                  # 输入不可见；落钥匙串，失败则降级文件（600）
+riv auth status                 # 三来源状态 + 生效项（token 脱敏展示）
+riv auth logout                 # 清除钥匙串与文件；环境变量需自行 unset
+riv auth login --host https://git.example.com:8443
+```
+
+保存时优先写系统钥匙串，并清理另一处的旧条目，避免过期凭证被优先读到；
+日志与错误输出中的 token 一律打码（保留前 4 后 4）。
 
 修订表达式（revparse）支持：`HEAD`、分支名、oid 前缀（≥4 位十六进制）、
 `^N`（第 N 父）与 `~N`（回溯 N 代）。
@@ -166,12 +190,12 @@ crates/
 ## 测试
 
 ```bash
-cargo test           # 144 个测试全部通过
+cargo test           # 167 个测试全部通过
 ```
 
-- `riv-core`：104 个单元测试（对象/索引/引用/快照/状态/检出/提交/日志/分支）
+- `riv-core`：122 个单元测试（对象/索引/引用/快照/状态/检出/提交/日志/分支/auth）
 - `riv-diff`：17 个单元测试 + 7 个最小性属性测试（与暴力 DP 对拍）
-- `riv-cli`：16 个端到端集成测试（对真实二进制跑完整命令流）
+- `riv-cli`：21 个端到端集成测试（对真实二进制跑完整命令流，含 auth 全流程）
 
 代码质量：`cargo clippy --all-targets` 零警告，`cargo fmt --check` 干净。
 
@@ -182,5 +206,6 @@ cargo test           # 144 个测试全部通过
 
 ## 当前范围与后续
 
-已实现本地核心工作流。**尚未实现**：远程协议（fetch/push/pull）、
-合并（merge）与三方合并、对象库垃圾回收、`stash`、交互式 add。
+已实现本地核心工作流与 token 凭证层（`riv auth`，0.2.0 新增）。**尚未实现**：
+远程协议（fetch/push/pull，凭证层已就位待对接）、合并（merge）与三方合并、
+对象库垃圾回收、`stash`、交互式 add。

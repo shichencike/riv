@@ -9,6 +9,7 @@
 //! - `branch` → `branch::{list, create, delete, rename}`
 //! - `checkout` → `checkout::checkout`
 //! - `diff` → `filediff::*` / `treediff::diff_trees`
+//! - `auth` → `auth::{get, set, delete, status}_token_with`（token 凭证管理）
 
 mod commands;
 
@@ -139,6 +140,33 @@ enum Command {
         #[arg(last = true)]
         paths: Vec<PathBuf>,
     },
+    /// 管理连接远程用的 Token 凭证
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthAction {
+    /// 输入并保存 Token（屏幕不回显）
+    Login {
+        /// 目标主机或 base URL（缺省 github.com，或 $RIV_BASE_URL）
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// 查看当前 Token 的来源与状态
+    Status {
+        /// 目标主机或 base URL（缺省 github.com，或 $RIV_BASE_URL）
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// 清除已保存的 Token（系统钥匙串与凭证文件）
+    Logout {
+        /// 目标主机或 base URL（缺省 github.com，或 $RIV_BASE_URL）
+        #[arg(long)]
+        host: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -206,5 +234,10 @@ fn run(cli: Cli) -> riv_core::Result<()> {
             stat,
             paths,
         } => commands::diff(&revs, cached, stat, &paths),
+        Command::Auth { action } => match action {
+            AuthAction::Login { host } => commands::auth_login(host.as_deref()),
+            AuthAction::Status { host } => commands::auth_status(host.as_deref()),
+            AuthAction::Logout { host } => commands::auth_logout(host.as_deref()),
+        },
     }
 }

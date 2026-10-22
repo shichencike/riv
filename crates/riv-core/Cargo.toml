@@ -16,6 +16,8 @@ zstd.workspace = true
 ignore.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+keyring.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

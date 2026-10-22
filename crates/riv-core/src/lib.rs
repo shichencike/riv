@@ -7,10 +7,12 @@
 //! - **操作层**：`status`（三方状态）、`commit`（提交）、`log`（历史）、
 //!   `branch`（分支管理）、`checkout`（检出/切换）、`treediff`（树间差异）、
 //!   `revparse`（修订解析）、`filediff`（文件级差异）。
+//! - **凭证层**：`auth`（token 管理：环境变量 > 系统钥匙串 > 本地文件）。
 //!
 //! riv 使用完全独立的存储格式（`.riv` 目录、`RIVOBJ` 对象格式），
 //! 不与 git 互操作。
 
+pub mod auth;
 pub mod branch;
 pub mod checkout;
 pub mod commit;

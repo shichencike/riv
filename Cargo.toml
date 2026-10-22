@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/riv-diff", "crates/riv-core", "crates/riv-cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 authors = ["riv contributors"]
@@ -12,8 +12,8 @@ description = "riv - a fast, distributed version control system written in Rust"
 repository = "https://github.com/riv-vcs/riv"
 
 [workspace.dependencies]
-riv-diff = { path = "crates/riv-diff", version = "0.1.0" }
-riv-core = { path = "crates/riv-core", version = "0.1.0" }
+riv-diff = { path = "crates/riv-diff", version = "0.2.0" }
+riv-core = { path = "crates/riv-core", version = "0.2.0" }
 blake3 = { version = "1", features = ["mmap"] }
 rayon = "1"
 zstd = "0.13"
@@ -22,6 +22,12 @@ clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tempfile = "3"
+# token 凭证管理：系统钥匙串 / 配置目录 / 终端隐藏输入
+# Linux 用 DBus Secret Service（持久，无 DBus 的 Termux/headless 干净失败→降级文件），
+# 而非 keyutils（会话级、重启丢失）
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+dirs = "5"
+rpassword = "7"
 
 [profile.release]
 lto = true

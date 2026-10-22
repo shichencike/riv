@@ -4,10 +4,11 @@
 //! 业务逻辑全部委托 riv-core，本模块只负责编排与展示。
 
 use std::fs;
-use std::io::{IsTerminal, Read};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcCommand;
 
+use riv_core::auth;
 use riv_core::branch as branch_ops;
 use riv_core::checkout::{self, CheckoutOptions};
 use riv_core::commit::{self, CommitOptions};
@@ -592,6 +593,119 @@ fn filter_by_paths(
         .into_iter()
         .filter(|d| path_matches(&d.path, paths, repo))
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+// auth（token 凭证管理）
+// ---------------------------------------------------------------------------
+
+/// `riv auth login`：隐藏输入并保存 token（优先系统钥匙串，失败降级文件）。
+pub fn auth_login(host: Option<&str>) -> Result<()> {
+    let host = resolve_host(host);
+    let cred_path = auth::credentials_path()?;
+    if let Some(existing) = auth::get_token_with(&host, &cred_path)? {
+        println!(
+            "Replacing existing token for {} (from {}).",
+            host,
+            existing.source.label()
+        );
+    }
+    let token = if io::stdin().is_terminal() {
+        // 交互终端：隐藏输入（rpassword 走 /dev/tty，屏幕不回显）
+        rpassword::prompt_password(format!("Token for {} (input hidden): ", host))
+            .map_err(|e| Error::msg(format!("failed to read token: {e}")))?
+    } else {
+        // 非交互（管道 / 重定向）：无 TTY 可隐藏，直接从 stdin 读一行。
+        // CI 场景更推荐用 RIV_TOKEN 环境变量（不落盘）。
+        print!("Token for {} (from stdin): ", host);
+        io::stdout().flush().ok();
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| Error::msg(format!("failed to read token: {e}")))?;
+        line
+    };
+    let source = auth::set_token_with(&host, &token, &cred_path)?;
+    match source {
+        auth::TokenSource::Keyring => println!("Token for {} saved to system keyring.", host),
+        auth::TokenSource::File => println!(
+            "System keyring unavailable; token for {} saved to {} (mode 600).",
+            host,
+            cred_path.display()
+        ),
+        auth::TokenSource::Env => {}
+    }
+    if auth::token_from_env().is_some() {
+        println!(
+            "Note: {} is set and takes precedence over the saved token.",
+            auth::ENV_TOKEN
+        );
+    }
+    Ok(())
+}
+
+/// `riv auth status`：三来源状态 + 当前生效项（token 脱敏展示）。
+pub fn auth_status(host: Option<&str>) -> Result<()> {
+    let host = resolve_host(host);
+    let cred_path = auth::credentials_path()?;
+    let st = auth::status_with(&host, &cred_path)?;
+
+    println!("Token status for {}:", host);
+    print_state("environment variable RIV_TOKEN", &st.env);
+    print_state("system keyring", &st.keyring);
+    let file_label = format!("credentials file ({})", cred_path.display());
+    print_state(&file_label, &st.file);
+    println!();
+    match st.effective() {
+        Some((src, token)) => println!(
+            "Effective token: {} (from {})",
+            auth::mask_token(token),
+            src.label()
+        ),
+        None => println!("No token configured. Run `riv auth login` to save one."),
+    }
+    Ok(())
+}
+
+/// `riv auth logout`：清除钥匙串与凭证文件中的 token（环境变量需用户自行 unset）。
+pub fn auth_logout(host: Option<&str>) -> Result<()> {
+    let host = resolve_host(host);
+    let cred_path = auth::credentials_path()?;
+    let cleared = auth::delete_token_with(&host, &cred_path)?;
+    if cleared.is_empty() {
+        println!(
+            "No saved token found for {} (checked system keyring and credentials file).",
+            host
+        );
+    } else {
+        let labels: Vec<&str> = cleared.iter().map(|s| s.label()).collect();
+        println!("Removed token for {} from: {}.", host, labels.join(", "));
+    }
+    if auth::token_from_env().is_some() {
+        println!(
+            "Note: {} is set in your shell environment; riv cannot unset it. Run `unset {}` to clear.",
+            auth::ENV_TOKEN,
+            auth::ENV_TOKEN
+        );
+    }
+    Ok(())
+}
+
+/// 解析目标主机：`--host` > `$RIV_BASE_URL` > GitHub 预设。
+fn resolve_host(host: Option<&str>) -> String {
+    match host {
+        Some(h) => auth::normalize_host(h),
+        None => auth::default_host(),
+    }
+}
+
+fn print_state(label: &str, state: &auth::SourceState) {
+    let desc = match state {
+        auth::SourceState::Present(t) => format!("set ({})", auth::mask_token(t)),
+        auth::SourceState::Absent => "not set".to_string(),
+        auth::SourceState::Unavailable => "unavailable".to_string(),
+    };
+    println!("  {label:<36} {desc}");
 }
 
 // ---------------------------------------------------------------------------
