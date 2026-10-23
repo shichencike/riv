@@ -68,7 +68,12 @@ pub fn commit(repo: &Repo, opts: &CommitOptions) -> Result<CommitOutcome> {
     };
     let old_tree = repo.head_tree()?;
 
-    if !opts.allow_empty && old_tree == Some(new_tree) {
+    // 空提交判断：
+    // - 非根提交：树与 HEAD 一致 → 无变化可提交
+    // - 根提交（无 HEAD）：索引为空 → 同样无内容可提交（对齐 git 对空仓库
+    //   初始提交的拒绝；确需空根提交用 --allow-empty）
+    let root_with_empty_index = old_tree.is_none() && index.is_empty();
+    if !opts.allow_empty && (old_tree == Some(new_tree) || root_with_empty_index) {
         return Err(Error::NothingToCommit);
     }
 
@@ -225,8 +230,18 @@ mod tests {
 
     #[test]
     fn commit_empty_repo_with_no_files() {
-        // 索引为空且无 HEAD：树为空树，允许提交（git 也允许 --allow-empty 的空根提交）
+        // 空仓库 + 空索引：默认拒绝（对齐 git），确需空根提交才 --allow-empty
         let (_d, repo) = setup();
+        let err = commit(
+            &repo,
+            &CommitOptions {
+                message: "root".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::NothingToCommit));
+        // allow_empty 放行
         let out = commit(
             &repo,
             &CommitOptions {

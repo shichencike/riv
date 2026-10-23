@@ -271,13 +271,10 @@ pub fn log(rev: Option<&str>, oneline: bool, max_count: usize) -> Result<()> {
         Some(spec) => Some(revparse::resolve(&repo, spec)?),
         None => None,
     };
-    let limit = if max_count == 0 {
-        None
-    } else {
-        Some(max_count)
-    };
-    let entries = log_ops::log(&repo, start, limit)?;
-    if entries.is_empty() {
+    // -n N 直接透传：N=0 表示显示 0 条（对齐 git log -n 0 输出为空、退出 0），
+    // 而不是「不限」——省略 -n 才是不限。
+    let entries = log_ops::log(&repo, start, Some(max_count))?;
+    if entries.is_empty() && max_count > 0 {
         return Err(Error::InvalidRevision(
             "your current branch does not have any commits yet".into(),
         ));
@@ -468,15 +465,7 @@ pub fn diff(revs: &[String], cached: bool, stat_only: bool, paths: &[PathBuf]) -
             changes
                 .into_iter()
                 .filter(|c| path_matches(&c.path, paths, &repo))
-                .filter_map(|c| {
-                    filediff::diff_blobs(
-                        &store,
-                        &c.path,
-                        c.old.map(|(o, _)| o).as_ref(),
-                        c.new.map(|(o, _)| o).as_ref(),
-                    )
-                    .transpose()
-                })
+                .filter_map(|c| filediff::diff_blobs(&store, &c.path, c.old, c.new).transpose())
                 .collect::<Result<Vec<_>>>()?
         }
         _ => return Err(Error::Msg("too many revisions".into())),
@@ -495,10 +484,11 @@ pub fn diff(revs: &[String], cached: bool, stat_only: bool, paths: &[PathBuf]) -
 
 /// 工作区 vs 索引（`riv diff` 默认）。
 fn diff_workdir_vs_index(repo: &Repo, paths: &[PathBuf]) -> Result<Vec<filediff::FileDiff>> {
+    // 索引只加载一次：逐路径各自 repo.index() 会把同一文件反复解码（O(n²) IO）
     let index = repo.index()?;
     let mut out = Vec::new();
     for entry in &index.entries {
-        if let Some(d) = filediff::diff_index_vs_workdir(repo, &entry.path)? {
+        if let Some(d) = filediff::diff_index_vs_workdir(repo, &index, &entry.path)? {
             out.push(d);
         }
     }
@@ -521,12 +511,7 @@ fn diff_head_vs_index(repo: &Repo, paths: &[PathBuf]) -> Result<Vec<filediff::Fi
     let changes = diff_tree_maps(&head_tree.unwrap_or_default(), &index_map);
     let mut out = Vec::new();
     for c in changes {
-        if let Some(d) = filediff::diff_blobs(
-            &store,
-            &c.path,
-            c.old.map(|(o, _)| o).as_ref(),
-            c.new.map(|(o, _)| o).as_ref(),
-        )? {
+        if let Some(d) = filediff::diff_blobs(&store, &c.path, c.old, c.new)? {
             out.push(d);
         }
     }
@@ -534,6 +519,10 @@ fn diff_head_vs_index(repo: &Repo, paths: &[PathBuf]) -> Result<Vec<filediff::Fi
 }
 
 /// 树 vs 工作区（`riv diff <rev>`）。
+///
+/// 除目标树的路径外，**索引中新增的路径**（该 rev 之后 `add` 进去的）也要
+/// 出现在 diff 里——git 的 `git diff <rev>` 语义是「rev 与工作区的全部
+/// 已跟踪内容」之比，漏掉它们会让暂存的新文件看起来不存在。
 fn diff_tree_vs_workdir(
     repo: &Repo,
     rev: Option<Oid>,
@@ -548,11 +537,22 @@ fn diff_tree_vs_workdir(
         Some(t) => Some(riv_core::snapshot::flatten_tree(&store, Some(t))?),
         None => None,
     };
+    let flat = flat.unwrap_or_default();
+    let index = repo.index()?;
     let mut out = Vec::new();
-    for (path, (oid, _)) in flat.unwrap_or_default() {
-        let abs = repo.workdir.join(&path);
-        if let Some(d) = filediff::diff_blob_workdir(&store, &path, Some(&oid), &abs)? {
+    for (path, (oid, mode)) in &flat {
+        let abs = repo.workdir.join(path);
+        if let Some(d) = filediff::diff_blob_workdir(&store, path, Some((*oid, *mode)), &abs)? {
             out.push(d);
+        }
+    }
+    // 索引有、目标树没有的路径：以「新增文件」身份参与比较
+    for entry in &index.entries {
+        if !flat.contains_key(&entry.path) {
+            let abs = repo.workdir.join(&entry.path);
+            if let Some(d) = filediff::diff_blob_workdir(&store, &entry.path, None, &abs)? {
+                out.push(d);
+            }
         }
     }
     filter_by_paths(out, paths, repo)
@@ -570,13 +570,18 @@ fn commit_tree(repo: &Repo, oid: Oid) -> Result<Oid> {
     }
 }
 
+/// 路径过滤：空 pathspec 全收；否则精确匹配或**目录前缀**匹配
+/// （`riv diff -- src` 应收 `src/` 下所有文件，与 checkout/add 的前缀语义一致）。
 fn path_matches(path: &str, paths: &[PathBuf], repo: &Repo) -> bool {
     if paths.is_empty() {
         return true;
     }
     paths.iter().any(|p| {
         repo.to_repo_relative(p)
-            .map(|rel| rel.to_string_lossy().replace('\\', "/") == path)
+            .map(|rel| {
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                path == rel_str || path.starts_with(&format!("{rel_str}/"))
+            })
             .unwrap_or(false)
     })
 }

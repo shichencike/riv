@@ -134,7 +134,7 @@ fn check_safe(repo: &Repo, target_tree: &TreeMap, force: bool) -> Result<()> {
         let abs = repo.workdir.join(path);
         match index.get(path) {
             Some(entry) => {
-                if entry.oid != *oid || entry.mode != *mode {
+                if entry.oid != *oid || !crate::object::mode_equivalent(entry.mode, *mode) {
                     // 目标与索引不同：工作区有本地修改则不允许覆盖
                     if let Freshness::Dirty { .. } = check_freshness(entry, &abs, index_mtime)? {
                         local_changes.push(path.clone());
@@ -175,6 +175,15 @@ fn check_safe(repo: &Repo, target_tree: &TreeMap, force: bool) -> Result<()> {
 }
 
 /// 把工作区与索引物化为目标树。返回 (更新的文件, 删除的文件)。
+///
+/// 两个关键性质：
+/// 1. **只写变化的文件**：索引条目已与目标一致、且工作区文件经 stat 缓存
+///    校验确认为干净时跳过写入。判断必须同时看索引与工作区实际状态——
+///    仅凭索引一致就跳过，会在工作区文件被改动/删除时留下与目标树不符
+///    的内容（status 显示 modified/deleted），那是错误的「假干净」。
+/// 2. **先写后删**：所有写入成功后才执行删除。中途失败（磁盘满、权限）
+///    最多留下多余文件（索引未动 → 显示为未跟踪），绝不会出现「文件已删
+///    但写入失败」的半切换状态。
 fn materialize(
     repo: &Repo,
     target_tree: &TreeMap,
@@ -182,27 +191,23 @@ fn materialize(
 ) -> Result<(Vec<String>, Vec<String>)> {
     let store = repo.store()?;
 
-    // 1. 删除索引中不在目标树的文件
-    let mut removed = Vec::new();
-    let old_paths: Vec<String> = index.paths().map(|s| s.to_string()).collect();
-    for p in old_paths {
-        if !target_tree.contains_key(&p) {
-            let abs = repo.workdir.join(&p);
-            if abs.symlink_metadata().is_ok() {
-                fs::remove_file(&abs)?;
-                removed.push(p.clone());
-            }
-            index.remove(&p);
-        }
-    }
-
-    // 2. 清理因删除产生的空目录
-    prune_empty_dirs(&repo.workdir)?;
-
-    // 3. 写出目标树的全部条目
+    // 1. 先完整走一遍写入阶段（可能因读取失败而中止，此时未动任何文件）
     let mut updated = Vec::new();
     for (path, (oid, mode)) in target_tree {
         let abs = repo.workdir.join(path);
+        let already_current = match index.get(path) {
+            Some(e) if e.oid == *oid && crate::object::mode_equivalent(e.mode, *mode) => {
+                // 索引与目标一致：再看工作区实际状态是否干净
+                matches!(
+                    check_freshness(e, &abs, index.index_mtime_sec)?,
+                    Freshness::Clean
+                )
+            }
+            _ => false,
+        };
+        if already_current {
+            continue;
+        }
         write_tree_entry(&store, &abs, oid, *mode)?;
         // 刷新索引条目（oid/mode 来自树，stat 取刚写出的文件）
         let meta = fs::symlink_metadata(&abs)?;
@@ -220,7 +225,29 @@ fn materialize(
     }
     updated.sort();
     updated.dedup();
+
+    // 2. 写入全部成功，才删除索引中不在目标树的文件
+    let mut removed = Vec::new();
+    let mut removed_parents: Vec<PathBuf> = Vec::new();
+    let old_paths: Vec<String> = index.paths().map(|s| s.to_string()).collect();
+    for p in old_paths {
+        if !target_tree.contains_key(&p) {
+            let abs = repo.workdir.join(&p);
+            if abs.symlink_metadata().is_ok() {
+                fs::remove_file(&abs)?;
+                removed.push(p.clone());
+                if let Some(parent) = abs.parent() {
+                    removed_parents.push(parent.to_path_buf());
+                }
+            }
+            index.remove(&p);
+        }
+    }
     removed.sort();
+
+    // 3. 只清理因删除而可能空掉的目录（被删文件的祖先链），
+    //    不动工作区里其他空目录（用户自建的 build/ 等不应被误删）。
+    prune_dirs(&repo.workdir, removed_parents)?;
     Ok((updated, removed))
 }
 
@@ -376,33 +403,32 @@ fn atomic_write(abs: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// 递归删除空目录（保留根目录与 `.riv`）。
-fn prune_empty_dirs(root: &Path) -> Result<()> {
-    fn walk(dir: &Path, root: &Path) -> Result<bool> {
-        let mut empty = true;
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.file_name() == Some(std::ffi::OsStr::new(".riv")) {
-                empty = false;
-                continue;
+/// 清理一批「可能因文件删除而空掉的目录」：从每个目录逐级向上，
+/// 空则删、非空即停；永不触碰仓库根与 `.riv`。
+/// 相比全工作区扫描，只动与本次删除相关的目录，不会误删用户自建的空目录。
+fn prune_dirs(root: &Path, candidates: Vec<PathBuf>) -> Result<()> {
+    // 去重 + 按路径长度降序（先处理更深的目录，父目录是否为空由子目录决定）
+    let mut dirs: Vec<PathBuf> = candidates.into_iter().collect();
+    dirs.sort_by(|a, b| b.cmp(a));
+    dirs.dedup();
+    for dir in dirs {
+        let mut cur = dir.as_path();
+        // 逐级上溯：目录为空才删除并继续检查其父目录
+        while cur != root && cur.starts_with(root) {
+            let is_empty = fs::read_dir(cur)
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(false);
+            if !is_empty {
+                break;
             }
-            let meta = fs::symlink_metadata(&path)?;
-            if meta.is_dir() {
-                if !walk(&path, root)? {
-                    empty = false;
-                }
-            } else {
-                empty = false;
+            if fs::remove_dir(cur).is_err() {
+                break;
+            }
+            match cur.parent() {
+                Some(p) => cur = p,
+                None => break,
             }
         }
-        if empty && dir != root {
-            fs::remove_dir(dir)?;
-        }
-        Ok(empty)
-    }
-    if root.is_dir() {
-        walk(root, root)?;
     }
     Ok(())
 }
@@ -798,6 +824,73 @@ mod tests {
             );
             assert!(status(&repo).unwrap().is_clean());
         }
+    }
+
+    #[test]
+    fn unchanged_files_are_not_rewritten() {
+        // 切分支时，两分支间内容一致的文件不应被重写：
+        // - 报告里不出现在 updated
+        // - 文件 mtime 不变（没有被碰过的证据）
+        let (dir, repo) = setup();
+        let c1 = commit_workdir(&repo, &[("a.txt", b"v1"), ("shared.txt", b"same")], "c1");
+        let _c2 = commit_workdir(&repo, &[("a.txt", b"v2"), ("shared.txt", b"same")], "c2");
+        repo.refs().set_branch("old", &c1).unwrap();
+        let shared = dir.path().join("shared.txt");
+        let mtime_before = fs::metadata(&shared).unwrap().modified().unwrap();
+        let report = checkout(&repo, Some("old"), &CheckoutOptions::default()).unwrap();
+        // 只有真正变化的 a.txt 被更新；shared.txt 被跳过
+        assert_eq!(report.updated, vec!["a.txt".to_string()]);
+        let mtime_after = fs::metadata(&shared).unwrap().modified().unwrap();
+        assert_eq!(mtime_before, mtime_after, "一致文件不应被重写");
+        assert!(status(&repo).unwrap().is_clean());
+        // 切回 main 同样跳过 shared.txt
+        let report = checkout(&repo, Some("main"), &CheckoutOptions::default()).unwrap();
+        assert_eq!(report.updated, vec!["a.txt".to_string()]);
+        assert_eq!(
+            fs::metadata(&shared).unwrap().modified().unwrap(),
+            mtime_before
+        );
+    }
+
+    #[test]
+    fn dirty_unchanged_file_is_restored_not_skipped() {
+        // 正确性陷阱的对应用例：索引与目标一致，但工作区文件被改脏。
+        // 此时「只比索引」会错误地跳过写入，留下与目标树不符的内容；
+        // 实现比的是工作区实际状态 → 脏文件必须被目标内容覆盖。
+        let (dir, repo) = setup();
+        let c1 = commit_workdir(&repo, &[("a.txt", b"v1"), ("keep.txt", b"k")], "c1");
+        let _c2 = commit_workdir(&repo, &[("a.txt", b"v2"), ("keep.txt", b"k")], "c2");
+        repo.refs().set_branch("old", &c1).unwrap();
+        // keep.txt 在两分支间一致，但工作区里被改脏
+        fs::write(dir.path().join("keep.txt"), b"dirty").unwrap();
+        let report = checkout(&repo, Some("old"), &CheckoutOptions::default()).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("keep.txt")).unwrap(),
+            "k",
+            "脏文件必须被恢复为目标内容"
+        );
+        assert!(report.updated.contains(&"keep.txt".to_string()));
+        assert!(status(&repo).unwrap().is_clean());
+    }
+
+    #[test]
+    fn prune_only_removes_dirs_emptied_by_deletion() {
+        // prune 只清理因本次删除而空掉的目录；用户自建的空目录不受影响
+        let (dir, repo) = setup();
+        let c1 = commit_workdir(&repo, &[("a.txt", b"v1")], "c1");
+        let _c2 = commit_workdir(&repo, &[("a.txt", b"v1"), ("gone/deep/f.txt", b"x")], "c2");
+        repo.refs().set_branch("old", &c1).unwrap();
+        // 用户自建的空目录（未被跟踪）
+        fs::create_dir_all(dir.path().join("user_empty")).unwrap();
+        fs::create_dir_all(dir.path().join("user_empty/nested")).unwrap();
+        // 切到 old：gone/deep/f.txt 被删 → gone/deep 与 gone 变空应被清理
+        checkout(&repo, Some("old"), &CheckoutOptions::default()).unwrap();
+        assert!(!dir.path().join("gone").exists(), "空目录链应被清理");
+        assert!(
+            dir.path().join("user_empty/nested").is_dir(),
+            "与本次删除无关的空目录不应被误删"
+        );
+        assert!(status(&repo).unwrap().is_clean());
     }
 
     #[test]

@@ -33,8 +33,12 @@ impl RefStore {
         self.riv_dir.join("HEAD")
     }
 
-    fn branch_path(&self, name: &str) -> PathBuf {
-        self.riv_dir.join("refs").join("heads").join(name)
+    fn branch_path(&self, name: &str) -> Result<PathBuf> {
+        // 所有分支路径的收口：写路径（set_branch / set_head_symbolic）本就校验，
+        // 读/删路径（branch_oid / delete_branch）也在这里统一拦截非法名，
+        // 防止 `../../etc/passwd` 之类把引用读写引到 .riv 之外。
+        Self::validate_branch_name(name)?;
+        Ok(self.riv_dir.join("refs").join("heads").join(name))
     }
 
     fn validate_branch_name(name: &str) -> Result<()> {
@@ -105,7 +109,7 @@ impl RefStore {
     }
 
     pub fn branch_oid(&self, name: &str) -> Result<Option<Oid>> {
-        let path = self.branch_path(name);
+        let path = self.branch_path(name)?;
         match fs::read_to_string(&path) {
             Ok(text) => Ok(Some(text.trim().parse()?)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -114,8 +118,7 @@ impl RefStore {
     }
 
     pub fn set_branch(&self, name: &str, oid: &Oid) -> Result<()> {
-        Self::validate_branch_name(name)?;
-        let path = self.branch_path(name);
+        let path = self.branch_path(name)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -124,7 +127,7 @@ impl RefStore {
     }
 
     pub fn delete_branch(&self, name: &str) -> Result<()> {
-        let path = self.branch_path(name);
+        let path = self.branch_path(name)?;
         fs::remove_file(&path).map_err(|_| Error::BranchNotFound(name.to_string()))?;
         // 清理可能空掉的父目录
         let mut dir = path.parent().map(|p| p.to_path_buf());
@@ -229,6 +232,18 @@ mod tests {
         assert!(store.set_branch("refs/heads/x", &oid).is_err());
         assert!(store.set_branch("a..b", &oid).is_err());
         assert!(store.set_branch("a b", &oid).is_err());
+    }
+
+    #[test]
+    fn invalid_names_rejected_on_read_paths_too() {
+        // 读/删路径与写路径同样校验：分支名是 .riv 内路径的组成部分，
+        // 非法名必须被 branch_path 统一拦截，而不是拼出越界路径。
+        let (_d, store) = setup();
+        assert!(store.branch_oid("../../etc/passwd").is_err());
+        assert!(store.branch_oid("a..b").is_err());
+        assert!(store.delete_branch("../evil").is_err());
+        assert!(store.set_branch("ok.name", &Oid::ZERO).is_ok());
+        assert!(store.branch_oid("ok.name").is_ok());
     }
 
     #[test]

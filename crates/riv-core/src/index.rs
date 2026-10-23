@@ -6,7 +6,7 @@
 //! 二进制格式（小端）：
 //! ```text
 //! magic   b"RIVIDX\x01\x00"
-//! version u32 = 1
+//! version u32 = 2
 //! count   u32
 //! entries (按路径排序):
 //!   path_len   u16
@@ -17,7 +17,7 @@
 //!   mtime_sec  i64
 //!   mtime_nsec i32
 //!   flags      u32
-//! checksum u64   (FNV-1a，覆盖之前所有字节)
+//! checksum u64   (v2: blake3 前 8 字节，覆盖之前所有字节；v1: FNV-1a，只读兼容)
 //! ```
 //!
 //! racy 检查（对齐 git）：`load` 时额外记录索引文件自身的 mtime（仅运行时，
@@ -33,7 +33,14 @@ use crate::error::{Error, Result};
 use crate::oid::Oid;
 
 const MAGIC: &[u8; 8] = b"RIVIDX\x01\x00";
-const VERSION: u32 = 1;
+/// v1 用 FNV-1a 校验和（只读兼容）；v2 起用 blake3 前 8 字节。
+const VERSION: u32 = 2;
+const LEGACY_VERSION: u32 = 1;
+/// 索引条目的最小序列化长度（path_len 2 + oid 32 + mode 4 + size 8 +
+/// mtime_sec 8 + mtime_nsec 4 + flags 4 + 空路径 0）。
+const MIN_ENTRY_BYTES: usize = 62;
+/// 损坏/恶意索引的条数上限：count 不可能超过「文件大小能容纳的条目数」。
+const MAX_PREALLOC: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexEntry {
@@ -139,7 +146,7 @@ impl Index {
             out.extend_from_slice(&e.mtime_nsec.to_le_bytes());
             out.extend_from_slice(&e.flags.to_le_bytes());
         }
-        out.extend_from_slice(&fnv1a(&out).to_le_bytes());
+        out.extend_from_slice(&checksum_v2(&out).to_le_bytes());
         out
     }
 
@@ -148,18 +155,32 @@ impl Index {
             return Err(Error::CorruptIndex("bad magic".into()));
         }
         let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        if version != VERSION {
+        if version != VERSION && version != LEGACY_VERSION {
             return Err(Error::CorruptIndex(format!(
                 "unsupported version {version}"
             )));
         }
         let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        // count 上限：每条目至少 62 字节，count 超过文件能容纳的量必为损坏数据
+        // （否则 Vec::with_capacity(count) 会被伪造的 count 放大成 OOM）。
+        let max_entries = bytes.len().saturating_sub(24) / MIN_ENTRY_BYTES;
+        if count > max_entries {
+            return Err(Error::CorruptIndex(format!(
+                "entry count {count} exceeds file capacity {max_entries}"
+            )));
+        }
+        let body = &bytes[..bytes.len() - 8];
         let stored_checksum = u64::from_le_bytes(bytes[bytes.len() - 8..].try_into().unwrap());
-        if fnv1a(&bytes[..bytes.len() - 8]) != stored_checksum {
+        let computed = if version == LEGACY_VERSION {
+            fnv1a(body)
+        } else {
+            checksum_v2(body)
+        };
+        if computed != stored_checksum {
             return Err(Error::CorruptIndex("checksum mismatch".into()));
         }
         let mut off = 16;
-        let mut entries = Vec::with_capacity(count);
+        let mut entries = Vec::with_capacity(count.min(MAX_PREALLOC));
         for _ in 0..count {
             if off + 2 > bytes.len() - 8 {
                 return Err(Error::CorruptIndex("truncated entry".into()));
@@ -201,7 +222,7 @@ impl Index {
     }
 }
 
-/// FNV-1a 64 位。
+/// FNV-1a 64 位（v1 索引遗留校验和，仅解码时兼容使用）。
 pub fn fnv1a(data: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in data {
@@ -209,6 +230,13 @@ pub fn fnv1a(data: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+/// v2 索引校验和：blake3 的前 8 字节（小端）。
+/// 与对象库同一哈希族，避免再维护一套校验码。
+pub fn checksum_v2(data: &[u8]) -> u64 {
+    let h = blake3::hash(data);
+    u64::from_le_bytes(h.as_bytes()[..8].try_into().unwrap())
 }
 
 #[cfg(test)]
@@ -271,6 +299,42 @@ mod tests {
         bytes[last] ^= 0xff;
         assert!(Index::decode(&bytes).is_err());
         assert!(Index::decode(b"garbage").is_err());
+    }
+
+    #[test]
+    fn legacy_v1_index_still_readable() {
+        // v1（FNV-1a 校验和）的索引文件必须仍能解码——老仓库升级不丢暂存区
+        let mut idx = Index::new();
+        idx.insert(entry("legacy.txt", 7));
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&LEGACY_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        let e = idx.get("legacy.txt").unwrap();
+        let pb = e.path.as_bytes();
+        bytes.extend_from_slice(&(pb.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(pb);
+        bytes.extend_from_slice(e.oid.as_bytes());
+        bytes.extend_from_slice(&e.mode.to_le_bytes());
+        bytes.extend_from_slice(&e.size.to_le_bytes());
+        bytes.extend_from_slice(&e.mtime_sec.to_le_bytes());
+        bytes.extend_from_slice(&e.mtime_nsec.to_le_bytes());
+        bytes.extend_from_slice(&e.flags.to_le_bytes());
+        bytes.extend_from_slice(&fnv1a(&bytes).to_le_bytes());
+        let decoded = Index::decode(&bytes).unwrap();
+        assert_eq!(decoded.get("legacy.txt").unwrap().size, 107);
+    }
+
+    #[test]
+    fn absurd_count_rejected_without_oom() {
+        // 伪造一个巨大 count 的小文件：必须在分配前拒绝
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&VERSION.to_le_bytes());
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]); // 空 body + 校验和位
+        let err = Index::decode(&bytes).unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "unexpected: {err}");
     }
 
     #[test]

@@ -23,7 +23,7 @@ pub fn resolve(repo: &Repo, spec: &str) -> Result<Oid> {
     }
 
     // 拆分 base 与导航后缀：base 是第一个 '^' 或 '~' 之前的部分。
-    let (base, navs) = split_navs(spec);
+    let (base, navs) = split_navs(spec)?;
 
     let mut oid = resolve_base(repo, base)?;
 
@@ -34,7 +34,10 @@ pub fn resolve(repo: &Repo, spec: &str) -> Result<Oid> {
 }
 
 /// 拆分出 base 与后缀列表，如 `HEAD~2^` → ("HEAD", [Ancestor(2), Parent(1)])。
-fn split_navs(spec: &str) -> (&str, Vec<Nav>) {
+///
+/// 后缀段只允许 `^`/`~` 加可选数字；出现任何其他字符（如 `HEAD^abc`）
+/// 都是非法修订表达式，报错而不是静默吞掉。
+fn split_navs(spec: &str) -> Result<(&str, Vec<Nav>)> {
     let end = spec.find(['^', '~']).unwrap_or(spec.len());
     let base = &spec[..end];
     let mut navs = Vec::new();
@@ -42,7 +45,12 @@ fn split_navs(spec: &str) -> (&str, Vec<Nav>) {
     while !rest.is_empty() {
         let kind = match rest.as_bytes()[0] {
             b'^' => NavKind::Parent,
-            _ => NavKind::Ancestor,
+            b'~' => NavKind::Ancestor,
+            _ => {
+                return Err(Error::InvalidRevision(format!(
+                    "invalid revision suffix in: {spec}"
+                )))
+            }
         };
         rest = &rest[1..];
         // 读取数字（缺省为 1）
@@ -53,12 +61,14 @@ fn split_navs(spec: &str) -> (&str, Vec<Nav>) {
         let n: u32 = if digits.is_empty() {
             1
         } else {
-            digits.parse().unwrap_or(1)
+            digits
+                .parse()
+                .map_err(|_| Error::InvalidRevision(format!("invalid revision: {spec}")))?
         };
         navs.push(Nav { kind, n });
         rest = tail;
     }
-    (base, navs)
+    Ok((base, navs))
 }
 
 enum NavKind {
@@ -319,5 +329,20 @@ mod tests {
         assert!(resolve(&repo, "HEAD").is_err());
         let _ = fs::remove_file(repo.riv_dir.join("refs/heads/main"));
         assert!(resolve(&repo, "main").is_err());
+    }
+
+    #[test]
+    fn invalid_suffix_rejected() {
+        let (_d, repo) = setup();
+        make_chain(&repo, 1);
+        // 后缀段只接受 ^ / ~ 与数字；其他字符必须报错而非静默解析
+        assert!(resolve(&repo, "HEAD^abc").is_err());
+        assert!(resolve(&repo, "HEAD~x").is_err());
+        assert!(resolve(&repo, "HEAD^^!").is_err());
+        // 合法后缀仍然工作
+        assert_eq!(
+            resolve(&repo, "HEAD^0").unwrap(),
+            resolve(&repo, "HEAD").unwrap()
+        );
     }
 }

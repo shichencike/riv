@@ -61,7 +61,10 @@ pub fn diff_tree_maps(old: &TreeMap, new: &TreeMap) -> Vec<TreeChange> {
                 new: None,
             }),
             (Some(ov), Some(nv)) => {
-                if ov == nv {
+                // oid 相同且 mode 在当前平台语义下等价 → 无变化。
+                // Windows 上 exec 位差异不可见（对齐 core.filemode=false），
+                // 避免跨平台提交产生幻影 mode 变更。
+                if ov.0 == nv.0 && crate::object::mode_equivalent(ov.1, nv.1) {
                     continue;
                 }
                 let kind = if is_type_change(ov.1, nv.1) {
@@ -141,7 +144,9 @@ pub fn is_tree(store: &ObjectStore, oid: &Oid) -> Result<bool> {
 mod tests {
     use super::*;
     use crate::index::{Index, IndexEntry};
-    use crate::object::{Tree, TreeEntry, MODE_BLOB, MODE_BLOB_EXEC};
+    #[cfg(unix)]
+    use crate::object::MODE_BLOB_EXEC;
+    use crate::object::{Tree, TreeEntry, MODE_BLOB};
     use crate::repo::Repo;
     use crate::snapshot::build_tree_from_index;
 
@@ -218,12 +223,15 @@ mod tests {
     #[test]
     fn diff_type_changed() {
         let (_d, repo) = setup();
-        // exec 位变化（oid 相同、mode 不同）→ git 语义为 Modified
-        let old = index_with(&repo, &[("run.sh", b"#!/bin/sh", MODE_BLOB)]);
-        let new = index_with(&repo, &[("run.sh", b"#!/bin/sh", MODE_BLOB_EXEC)]);
-        let changes = diff_trees(&repo.store().unwrap(), Some(old), Some(new)).unwrap();
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].kind, ChangeKind::Modified);
+        #[cfg(unix)]
+        {
+            // exec 位变化（oid 相同、mode 不同）→ git 语义为 Modified
+            let old = index_with(&repo, &[("run.sh", b"#!/bin/sh", MODE_BLOB)]);
+            let new = index_with(&repo, &[("run.sh", b"#!/bin/sh", MODE_BLOB_EXEC)]);
+            let changes = diff_trees(&repo.store().unwrap(), Some(old), Some(new)).unwrap();
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[0].kind, ChangeKind::Modified);
+        }
 
         // 真正的类型变化：普通文件 → symlink
         let store = repo.store().unwrap();

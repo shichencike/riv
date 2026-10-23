@@ -30,6 +30,10 @@ pub enum FileDiffBody {
 #[derive(Debug, Clone)]
 pub struct FileDiff {
     pub path: String,
+    /// 旧侧 mode（None = 不存在该侧）
+    pub old_mode: Option<u32>,
+    /// 新侧 mode（None = 不存在该侧）
+    pub new_mode: Option<u32>,
     pub body: FileDiffBody,
 }
 
@@ -51,9 +55,24 @@ impl FileDiff {
     }
 }
 
-/// 构造文件差异；两侧内容完全一致时返回 None。
-fn build(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> Option<FileDiff> {
-    if old == new {
+/// mode 比较（None 按普通文件计）：平台语义由 `mode_equivalent` 决定，
+/// Windows 上 exec 位差异不可见，不会产生幻影 mode 变更。
+fn modes_equivalent(a: Option<u32>, b: Option<u32>) -> bool {
+    crate::object::mode_equivalent(
+        a.unwrap_or(crate::object::MODE_BLOB),
+        b.unwrap_or(crate::object::MODE_BLOB),
+    )
+}
+
+/// 构造文件差异；内容与 mode 均一致时返回 None。
+fn build(
+    path: &str,
+    old_mode: Option<u32>,
+    old: Option<&[u8]>,
+    new_mode: Option<u32>,
+    new: Option<&[u8]>,
+) -> Option<FileDiff> {
+    if old == new && modes_equivalent(old_mode, new_mode) {
         return None;
     }
     let body = if old.map(riv_diff::is_binary).unwrap_or(false)
@@ -64,7 +83,7 @@ fn build(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> Option<FileDiff>
             new_size: new.map(|v| v.len() as u64).unwrap_or(0),
         }
     } else {
-        let unified = riv_diff::format_file_diff(path, old, new, 3);
+        let unified = riv_diff::format_file_diff(path, old_mode, old, new_mode, new, 3);
         let (insertions, deletions) = riv_diff::file_stat(path, old, new)
             .map(|s| (s.insertions, s.deletions))
             .unwrap_or((0, 0));
@@ -76,55 +95,75 @@ fn build(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> Option<FileDiff>
     };
     Some(FileDiff {
         path: path.to_string(),
+        old_mode,
+        new_mode,
         body,
     })
 }
 
-/// 两个 blob 之间的差异（None 表示「不存在」）。
+/// 两个 blob 之间的差异（None 表示「不存在」），带两侧 mode。
 pub fn diff_blobs(
     store: &ObjectStore,
     path: &str,
-    old: Option<&Oid>,
-    new: Option<&Oid>,
+    old: Option<(Oid, u32)>,
+    new: Option<(Oid, u32)>,
 ) -> Result<Option<FileDiff>> {
     let old_data = match old {
-        Some(o) => Some(store.read_blob(o)?),
+        Some((o, _)) => Some(store.read_blob(&o)?),
         None => None,
     };
     let new_data = match new {
-        Some(o) => Some(store.read_blob(o)?),
+        Some((o, _)) => Some(store.read_blob(&o)?),
         None => None,
     };
-    Ok(build(path, old_data.as_deref(), new_data.as_deref()))
+    Ok(build(
+        path,
+        old.map(|(_, m)| m),
+        old_data.as_deref(),
+        new.map(|(_, m)| m),
+        new_data.as_deref(),
+    ))
 }
 
-/// 索引中的 blob 与工作区文件之间的差异。
+/// 索引中的 blob 与工作区文件之间的差异（带 mode；工作区侧取实际文件类型）。
 pub fn diff_blob_workdir(
     store: &ObjectStore,
     path: &str,
-    old: Option<&Oid>,
+    old: Option<(Oid, u32)>,
     workdir_file: &Path,
 ) -> Result<Option<FileDiff>> {
     let old_data = match old {
-        Some(o) => Some(store.read_blob(o)?),
+        Some((o, _)) => Some(store.read_blob(&o)?),
         None => None,
     };
-    let new_data = match std::fs::symlink_metadata(workdir_file) {
-        Ok(m) if m.file_type().is_symlink() => Some(
-            std::fs::read_link(workdir_file)?
+    let (new_data, new_mode) = match std::fs::symlink_metadata(workdir_file) {
+        Ok(m) if m.file_type().is_symlink() => {
+            let target = std::fs::read_link(workdir_file)?
                 .to_string_lossy()
                 .into_owned()
-                .into_bytes(),
-        ),
-        Ok(_) => Some(std::fs::read(workdir_file)?),
-        Err(_) => None,
+                .into_bytes();
+            (Some(target), Some(crate::object::MODE_LINK))
+        }
+        Ok(m) => {
+            let mode = crate::snapshot::stat_info(workdir_file, &m).3;
+            (Some(std::fs::read(workdir_file)?), Some(mode))
+        }
+        Err(_) => (None, None),
     };
-    Ok(build(path, old_data.as_deref(), new_data.as_deref()))
+    Ok(build(
+        path,
+        old.map(|(_, m)| m),
+        old_data.as_deref(),
+        new_mode,
+        new_data.as_deref(),
+    ))
 }
 
 /// 暂存内容（索引 oid）与工作区文件的差异；无差异返回 None。
-pub fn diff_index_vs_workdir(repo: &Repo, path: &str) -> Result<Option<FileDiff>> {
-    let index = repo.index()?;
+///
+/// 索引由调用方传入并复用：逐路径调用时若各自 `repo.index()`，
+/// 整个索引文件会被反复解码（O(n²) 次 IO）。
+pub fn diff_index_vs_workdir(repo: &Repo, index: &Index, path: &str) -> Result<Option<FileDiff>> {
     let Some(entry) = index.get(path) else {
         return Ok(None);
     };
@@ -134,7 +173,7 @@ pub fn diff_index_vs_workdir(repo: &Repo, path: &str) -> Result<Option<FileDiff>
     {
         return Ok(None);
     }
-    diff_blob_workdir(&repo.store()?, path, Some(&entry.oid), &abs)
+    diff_blob_workdir(&repo.store()?, path, Some((entry.oid, entry.mode)), &abs)
 }
 
 /// HEAD 树与工作区之间的差异（`git diff HEAD`）。
@@ -148,28 +187,27 @@ pub fn diff_head_vs_workdir(repo: &Repo) -> Result<Vec<FileDiff>> {
     let mut out = Vec::new();
     for entry in &index.entries {
         let abs = repo.workdir.join(&entry.path);
-        let head_oid = head_tree
-            .as_ref()
-            .and_then(|t| t.get(&entry.path))
-            .map(|(o, _)| *o);
+        let head_entry = head_tree.as_ref().and_then(|t| t.get(&entry.path)).copied();
         // 工作区 vs HEAD：若缓存可信且与索引一致，而索引与 HEAD 一致 → 无差异
         let clean_vs_index = matches!(
             check_freshness(entry, &abs, index.index_mtime_sec)?,
             crate::snapshot::Freshness::Clean
         );
-        let same_as_head = head_oid == Some(entry.oid);
+        let same_as_head = head_entry
+            .map(|(o, m)| o == entry.oid && modes_equivalent(Some(m), Some(entry.mode)))
+            .unwrap_or(false);
         if clean_vs_index && same_as_head {
             continue;
         }
-        if let Some(d) = diff_blob_workdir(&store, &entry.path, head_oid.as_ref(), &abs)? {
+        if let Some(d) = diff_blob_workdir(&store, &entry.path, head_entry, &abs)? {
             out.push(d);
         }
     }
     // HEAD 有、工作区/索引没有的文件（已暂存删除）也出现在 diff 中
     if let Some(head_tree) = head_tree {
-        for (path, (oid, _)) in &head_tree {
+        for (path, (oid, mode)) in &head_tree {
             if index.get(path).is_none() {
-                if let Some(d) = diff_blobs(&store, path, Some(oid), None)? {
+                if let Some(d) = diff_blobs(&store, path, Some((*oid, *mode)), None)? {
                     out.push(d);
                 }
             }
@@ -247,7 +285,9 @@ pub fn index_is_empty(index: &Index) -> bool {
 mod tests {
     use super::*;
     use crate::commit::{commit, CommitOptions};
-    use crate::object::Object;
+    use crate::object::{Object, MODE_BLOB};
+    #[cfg(unix)]
+    use crate::object::{MODE_BLOB_EXEC, MODE_LINK};
     use crate::snapshot::AddOptions;
     use std::fs;
 
@@ -269,9 +309,14 @@ mod tests {
                 b"line1\nline2 changed\nline3\nline4\n".to_vec(),
             ))
             .unwrap();
-        let d = diff_blobs(&store, "f.txt", Some(&old), Some(&new))
-            .unwrap()
-            .unwrap();
+        let d = diff_blobs(
+            &store,
+            "f.txt",
+            Some((old, MODE_BLOB)),
+            Some((new, MODE_BLOB)),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(d.path, "f.txt");
         let (ins, del) = d.stat();
         assert_eq!(ins, 2);
@@ -285,9 +330,14 @@ mod tests {
             panic!("expected text diff");
         }
         // 无差异
-        assert!(diff_blobs(&store, "f.txt", Some(&old), Some(&old))
-            .unwrap()
-            .is_none());
+        assert!(diff_blobs(
+            &store,
+            "f.txt",
+            Some((old, MODE_BLOB)),
+            Some((old, MODE_BLOB))
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
@@ -296,28 +346,33 @@ mod tests {
         let store = repo.store().unwrap();
         let old = store.write(&Object::Blob(b"only\n".to_vec())).unwrap();
         // 新增（old=None）
-        let d = diff_blobs(&store, "new.txt", None, Some(&old))
+        let d = diff_blobs(&store, "new.txt", None, Some((old, MODE_BLOB)))
             .unwrap()
             .unwrap();
         assert_eq!(d.stat(), (1, 0));
         // 删除（new=None）
-        let d = diff_blobs(&store, "old.txt", Some(&old), None)
+        let d = diff_blobs(&store, "old.txt", Some((old, MODE_BLOB)), None)
             .unwrap()
             .unwrap();
         assert_eq!(d.stat(), (0, 1));
     }
 
     #[test]
-    fn diff_binary() {
+    fn diff_blobs_binary() {
         let (_d, repo) = setup();
         let store = repo.store().unwrap();
         let old = store.write(&Object::Blob(vec![0u8, 1, 2, 0, 3])).unwrap();
         let new = store
             .write(&Object::Blob(vec![0u8, 9, 9, 0, 9, 9]))
             .unwrap();
-        let d = diff_blobs(&store, "bin", Some(&old), Some(&new))
-            .unwrap()
-            .unwrap();
+        let d = diff_blobs(
+            &store,
+            "bin",
+            Some((old, MODE_BLOB)),
+            Some((new, MODE_BLOB)),
+        )
+        .unwrap()
+        .unwrap();
         assert!(d.is_binary());
         assert_eq!(d.stat(), (0, 0));
         if let FileDiffBody::Binary { old_size, new_size } = &d.body {
@@ -327,16 +382,66 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // exec 位是 Unix 文件系统特性；Windows 上 mode_equivalent 忽略 exec 位
+    fn diff_blobs_mode_only_change() {
+        // 内容相同、mode 不同 → 产生 mode-only 差异（git 的 chmod 呈现）
+        let (_d, repo) = setup();
+        let store = repo.store().unwrap();
+        let blob = store.write(&Object::Blob(b"#!/bin/sh\n".to_vec())).unwrap();
+        let d = diff_blobs(
+            &store,
+            "run.sh",
+            Some((blob, MODE_BLOB)),
+            Some((blob, MODE_BLOB_EXEC)),
+        )
+        .unwrap()
+        .unwrap();
+        if let FileDiffBody::Text { unified, .. } = &d.body {
+            assert!(unified.contains("old mode 100644"), "{unified}");
+            assert!(unified.contains("new mode 100755"), "{unified}");
+        } else {
+            panic!("expected text diff");
+        }
+        assert_eq!(d.stat(), (0, 0));
+    }
+
+    #[test]
     fn index_vs_workdir_changes() {
         let (dir, repo) = setup();
         fs::write(dir.path().join("a.txt"), b"v1\n").unwrap();
         crate::snapshot::add(&repo, &AddOptions::default()).unwrap();
+        let index = repo.index().unwrap();
         // 无变化
-        assert!(diff_index_vs_workdir(&repo, "a.txt").unwrap().is_none());
+        assert!(diff_index_vs_workdir(&repo, &index, "a.txt")
+            .unwrap()
+            .is_none());
         // 工作区改动
         fs::write(dir.path().join("a.txt"), b"v2\n").unwrap();
-        let d = diff_index_vs_workdir(&repo, "a.txt").unwrap().unwrap();
+        let d = diff_index_vs_workdir(&repo, &index, "a.txt")
+            .unwrap()
+            .unwrap();
         assert_eq!(d.stat(), (1, 1));
+    }
+
+    #[test]
+    #[cfg(unix)] // exec 位是 Unix 文件系统特性
+    fn index_vs_workdir_mode_only_change() {
+        // chmod +x（内容不变）：索引 vs 工作区应产出 mode-only 差异
+        let (dir, repo) = setup();
+        fs::write(dir.path().join("run.sh"), b"#!/bin/sh\n").unwrap();
+        crate::snapshot::add(&repo, &AddOptions::default()).unwrap();
+        let index = repo.index().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir.path().join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        let d = diff_index_vs_workdir(&repo, &index, "run.sh")
+            .unwrap()
+            .unwrap();
+        if let FileDiffBody::Text { unified, .. } = &d.body {
+            assert!(unified.contains("old mode 100644"), "{unified}");
+            assert!(unified.contains("new mode 100755"), "{unified}");
+        } else {
+            panic!("expected text diff");
+        }
     }
 
     #[test]
@@ -373,9 +478,14 @@ mod tests {
         let store = repo.store().unwrap();
         let old = store.write(&Object::Blob(b"a\nb\n".to_vec())).unwrap();
         let new = store.write(&Object::Blob(b"a\nB\n".to_vec())).unwrap();
-        let d = diff_blobs(&store, "f.txt", Some(&old), Some(&new))
-            .unwrap()
-            .unwrap();
+        let d = diff_blobs(
+            &store,
+            "f.txt",
+            Some((old, MODE_BLOB)),
+            Some((new, MODE_BLOB)),
+        )
+        .unwrap()
+        .unwrap();
         let text = render(std::slice::from_ref(&d));
         assert!(text.contains("--- a/f.txt"));
         assert!(text.contains("+++ b/f.txt"));
@@ -397,15 +507,25 @@ mod tests {
             let store = repo.store().unwrap();
             let link_target = store.write(&Object::Blob(b"a.txt".to_vec())).unwrap();
             std::os::unix::fs::symlink("a.txt", dir.path().join("link")).unwrap();
-            let d = diff_blob_workdir(&store, "link", Some(&link_target), &dir.path().join("link"))
-                .unwrap();
+            let d = diff_blob_workdir(
+                &store,
+                "link",
+                Some((link_target, MODE_LINK)),
+                &dir.path().join("link"),
+            )
+            .unwrap();
             assert!(d.is_none()); // 目标一致
                                   // 改指向
             fs::remove_file(dir.path().join("link")).unwrap();
             std::os::unix::fs::symlink("other.txt", dir.path().join("link")).unwrap();
-            let d = diff_blob_workdir(&store, "link", Some(&link_target), &dir.path().join("link"))
-                .unwrap()
-                .unwrap();
+            let d = diff_blob_workdir(
+                &store,
+                "link",
+                Some((link_target, MODE_LINK)),
+                &dir.path().join("link"),
+            )
+            .unwrap()
+            .unwrap();
             assert_eq!(d.stat(), (1, 1));
         }
     }

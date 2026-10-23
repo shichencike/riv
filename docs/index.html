@@ -140,7 +140,7 @@
 <main id="top">
 
 <h1><span class="rev">riv</span> — 分布式版本控制系统</h1>
-<p class="term">v0.2.0 · Rust · MIT OR Apache-2.0</p>
+<p class="term">v0.3.0 · Rust · MIT OR Apache-2.0</p>
 
 <div class="badges">
   <span class="badge">Linux <b>✓</b></span>
@@ -205,8 +205,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
 <span class="c"># 2. 解压源码包并进入目录</span>
-tar xzf riv-0.2.0.tar.gz
-cd riv-0.2.0
+tar xzf riv-0.3.0.tar.gz
+cd riv-0.3.0
 
 <span class="c"># 3. 编译 release 版本</span>
 cargo build --release
@@ -239,8 +239,8 @@ cargo build --release
 </div>
 
 <pre><code><span class="c"># 在 PowerShell / CMD 中（任选上述一种工具链后）</span>
-tar xzf riv-0.2.0.tar.gz
-cd riv-0.2.0
+tar xzf riv-0.3.0.tar.gz
+cd riv-0.3.0
 
 cargo build --release
 
@@ -260,8 +260,8 @@ pkg update
 pkg install rust clang
 
 <span class="c"># 2. 解压源码包（如从其他设备拷贝，放在 $HOME 下，勿放 /sdcard——FAT 无 exec 位）</span>
-tar xzf riv-0.2.0.tar.gz
-cd riv-0.2.0
+tar xzf riv-0.3.0.tar.gz
+cd riv-0.3.0
 
 <span class="c"># 3. 编译（Termux 的 $HOME 位于 ext4/f2fs，exec 位与符号链接均可用，走完整 Unix 语义）</span>
 cargo build --release
@@ -277,7 +277,7 @@ cargo build --release
 <h3 id="build-verify">构建验证（可选）</h3>
 <pre><code>cargo fmt --all --check          <span class="c"># 格式干净</span>
 cargo clippy --all-targets       <span class="c"># 零警告</span>
-cargo test                       <span class="c"># 167 个测试全部通过</span></code></pre>
+cargo test                       <span class="c"># 188 个测试全部通过</span></code></pre>
 </section>
 
 <!-- ═══════════════ 3. 快速开始 ═══════════════ -->
@@ -324,10 +324,10 @@ A  a.txt
   <tr><td><code>riv add [paths]</code></td><td>暂存变更。无参数 = 整个工作区（含删除）；<code>-u</code> 只更新已跟踪文件；<code>-f</code> 强制添加被忽略文件；<code>-n</code> 预览不落盘</td></tr>
   <tr><td><code>riv commit -m/-F</code></td><td>从索引创建提交。无信息时回退 <code>$EDITOR</code>（非交互环境明确报错而非挂起）；<code>-a</code> 等价先执行 <code>add -u</code></td></tr>
   <tr><td><code>riv status</code></td><td>两列模型（staged/unstaged）+ untracked；<code>--porcelain</code> 输出机器可读格式</td></tr>
-  <tr><td><code>riv log</code></td><td>第一父提交链。<code>--oneline</code> / <code>-n N</code> / 可带 <code>&lt;rev&gt;</code> 起始点</td></tr>
-  <tr><td><code>riv branch</code></td><td>列表 / 创建 / <code>-d</code> 删除（未合并则拒绝）/ <code>-D</code> 强制删除 / <code>-m</code> 重命名</td></tr>
-  <tr><td><code>riv checkout</code></td><td><code>-b</code> 创建并切换；<code>&lt;branch|rev&gt;</code> 切换（带脏工作区安全检查）；<code>-- &lt;paths&gt;</code> 从索引恢复文件；<code>&lt;rev&gt; -- &lt;paths&gt;</code> 从指定树恢复</td></tr>
-  <tr><td><code>riv diff</code></td><td>默认 index vs 工作区；<code>--cached</code> = HEAD vs 索引；<code>&lt;rev&gt;</code> = rev vs 工作区；<code>&lt;rev1&gt; &lt;rev2&gt;</code> = 树间比较；<code>--stat</code> 只输出统计</td></tr>
+  <tr><td><code>riv log</code></td><td>第一父提交链。<code>--oneline</code> / <code>-n N</code>（<code>-n 0</code> 输出为空，对齐 git）/ 可带 <code>&lt;rev&gt;</code> 起始点</td></tr>
+  <tr><td><code>riv branch</code></td><td>列表 / 创建 / <code>-d</code> 删除（未合并则拒绝）/ <code>-D</code> 强制删除 / <code>-m</code> 重命名；分支名在创建/读取/删除全链路校验</td></tr>
+  <tr><td><code>riv checkout</code></td><td><code>-b</code> 创建并切换（与 paths 互斥）；<code>&lt;branch|rev&gt;</code> 切换（带脏工作区安全检查，未变化文件不重写）；<code>-- &lt;paths&gt;</code> 从索引恢复文件；<code>&lt;rev&gt; -- &lt;paths&gt;</code> 从指定树恢复</td></tr>
+  <tr><td><code>riv diff</code></td><td>默认 index vs 工作区；<code>--cached</code> = HEAD vs 索引（与显式 rev 互斥）；<code>&lt;rev&gt;</code> = rev vs 工作区（含索引新增路径）；<code>&lt;rev1&gt; &lt;rev2&gt;</code> = 树间比较；<code>--stat</code> 只输出统计；pathspec 支持目录前缀；输出真实 mode（<code>old mode</code>/<code>new mode</code>）</td></tr>
   <tr><td><code>riv auth</code></td><td><code>login</code> 隐藏输入并保存 token / <code>status</code> 查看三来源状态 / <code>logout</code> 清除；均支持 <code>--host</code>（详见下节）</td></tr>
 </table>
 
@@ -340,6 +340,7 @@ A  a.txt
   <tr><td><code>HEAD^2</code></td><td>第 N 个父提交</td></tr>
   <tr><td><code>HEAD~3</code></td><td>沿第一父回溯 N 代</td></tr>
 </table>
+<p>后缀部分仅接受数字，其他字符（如 <code>HEAD^abc</code>）报 <code>InvalidRevision</code>。</p>
 </section>
 
 <!-- ═══════════════ 5. Token 管理 ═══════════════ -->
@@ -468,8 +469,8 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 <h3>验证矩阵</h3>
 <table>
   <tr><th>平台</th><th>编译</th><th>clippy</th><th>测试</th></tr>
-  <tr><td>Linux x86_64</td><td>✓</td><td>0 警告</td><td>全部通过（167 个：core 122 + CLI 21 + diff 24）</td></tr>
-  <tr><td>Windows (GNU, wine 运行)</td><td>✓</td><td>0 警告</td><td>core 118/118 + CLI 21/21（Unix 专属测试按设计排除；Windows 凭据管理器真实生效）</td></tr>
+  <tr><td>Linux x86_64</td><td>✓</td><td>0 警告</td><td>全部通过（188 个：core 134 + CLI 26 + diff 21 + 最小性属性 7）</td></tr>
+  <tr><td>Windows (GNU, wine 运行)</td><td>✓</td><td>0 警告</td><td>core 128/128 + diff 21/21 + 最小性 7/7 + CLI 25/25（Unix 专属测试按设计排除；Windows 凭据管理器真实生效）</td></tr>
   <tr><td>Android aarch64 (NDK r26d 交叉编译)</td><td>✓</td><td>0 警告</td><td>编译级验证（Termux 直接编译同构）</td></tr>
 </table>
 </section>
@@ -491,6 +492,17 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 <p>索引（<code>.riv/index</code>）记录每个路径的 <code>oid / mode / size / mtime_sec / mtime_nsec</code>。
 <code>status</code> 与 <code>add</code> 依赖 stat 缓存避免重复读文件；当文件 mtime 秒 ≥ 索引文件自身 mtime 秒时
 （粗粒度时间戳文件系统上的经典竞态），强制重新哈希——与 git 的 racy-clean 检查一致。</p>
+<p>索引格式 v2 的校验和从 FNV-1a 升级为 <strong>blake3 前 8 字节</strong>，并对条目数量设上限
+（防伪造 count 触发预分配 OOM）；v1 文件仍可正常读取。</p>
+
+<h3>完整性与加固</h3>
+<ul>
+  <li><strong>读取即校验</strong>：对象读回后重算 blake3 与寻址 oid 比对，位翻转 / 坏盘 / 误写立即报错，对齐 git 松散对象校验；</li>
+  <li><strong>压缩炸弹防护</strong>：zstd 流式解压，上限 4 GiB，超出即拒；</li>
+  <li><strong>分支名校验</strong>：创建 / 读取 / 删除全链路拦截 <code>..</code>、<code>~^:?*[</code>、尾部 <code>.lock</code> 等非法名，路径穿越在构造路径前即被拒绝；</li>
+  <li><strong>修订后缀校验</strong>：<code>^</code> / <code>~</code> 后仅接受数字，<code>HEAD^abc</code> 报 <code>InvalidRevision</code> 而非静默忽略；</li>
+  <li><strong>提交完整性</strong>：空仓库且索引为空时拒绝创建空根提交（<code>--allow-empty</code> 显式放行）。</li>
+</ul>
 
 <h3>diff：对齐 git xdiff 的 Myers 算法</h3>
 <p><code>riv-diff</code> 实现了 Myers O(ND) 的<strong>线性空间分治</strong>版本，与 git 的 xdiff 同构：</p>
@@ -500,13 +512,16 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
   <li>进度保证：剥离后 D ≥ 2，递归必然收敛；</li>
   <li>成本安全阀 <code>max(256, sqrt(n+m))</code>：差异极大时退化为合法但非最小的编辑脚本（与 git 的 mxcost 行为一致）。</li>
 </ul>
-<p>输出为 git 风格 unified diff（<code>--- a/x</code> / <code>+++ b/x</code> / <code>@@</code> hunk），hunk 内稳定遵循「先删后增」。</p>
+<p>输出为 git 风格 unified diff（<code>--- a/x</code> / <code>+++ b/x</code> / <code>@@</code> hunk），hunk 内稳定遵循「先删后增」；
+mode 变化输出 <code>old mode</code> / <code>new mode</code> 行（仅 mode 变化时无 hunk）。</p>
 
 <h3>性能取向</h3>
 <ul>
   <li><strong>并行哈希</strong>：<code>add</code> 用 rayon 并行处理文件，大文件（≥ 1MB）走 mmap 零拷贝；</li>
   <li><strong>流式写入</strong>：blob 经 zstd Encoder 边算边写，内存占用与文件大小无关；</li>
-  <li><strong>增量 status</strong>：只重算 stat 缓存失效的路径。</li>
+  <li><strong>增量 status</strong>：只重算 stat 缓存失效的路径；</li>
+  <li><strong>惰性检出</strong>：checkout 时索引条目与目标树一致、且工作区经 freshness 校验为干净的文件直接跳过写入，大仓库切换分支不再全量重写；只清理被删文件所在的已空目录，不误删用户自建空目录；</li>
+  <li><strong>单次加载索引</strong>：<code>diff</code> 等命令把索引解码一次传入，消除逐路径重复加载的 O(n²) IO。</li>
 </ul>
 
 <h3>项目结构</h3>
@@ -543,7 +558,8 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 
 <h4>支持远程仓库吗？</h4>
 <p>0.2.0 已内置 <strong>token 凭证管理层</strong>（<code>riv auth login/status/logout</code>，环境变量 &gt;
-系统钥匙串 &gt; 本地文件三级存储），远程协议本身（fetch/push/pull）在路线图上，见下节。</p>
+系统钥匙串 &gt; 本地文件三级存储），0.3.0 完成了本地核心的健壮性加固（对象读取哈希校验、
+解压上限、惰性检出等），远程协议本身（fetch/push/pull）在路线图上，见下节。</p>
 
 <h4> riv 的文件都存在哪里？</h4>
 <ul>
@@ -561,7 +577,7 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 <!-- ═══════════════ 9. 路线图 ═══════════════ -->
 <section id="roadmap">
 <h2><span class="num">10</span>路线图</h2>
-<p>0.2.0 已实现本地核心工作流。<strong>尚未实现</strong>：</p>
+<p>0.3.0 已实现本地核心工作流与凭证层，并完成健壮性加固。<strong>尚未实现</strong>：</p>
 <ul>
   <li>远程协议（fetch / push / pull）；</li>
   <li>合并（merge）与三方合并；</li>
@@ -572,7 +588,7 @@ Windows 上回退为普通文件（对齐 git <code>core.symlinks=false</code>�
 </section>
 
 <footer>
-  <p>riv v0.2.0 · 用 Rust 编写 · MIT OR Apache-2.0 双许可 · 本页面为离线单文件文档，可直接双击打开或随压缩包分发。</p>
+  <p>riv v0.3.0 · 用 Rust 编写 · MIT OR Apache-2.0 双许可 · 本页面为离线单文件文档，可直接双击打开或随压缩包分发。</p>
 </footer>
 
 </main>

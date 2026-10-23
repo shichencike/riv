@@ -243,6 +243,10 @@ fn log_shows_history_oneline_and_limit() {
     let out = ok(dir, &["log", "--oneline", "-n", "1"]);
     assert_eq!(out.lines().count(), 1, "{out}");
 
+    // -n 0：输出为空但退出码为 0（对齐 git log -n 0，而非「不限」）
+    let out = ok(dir, &["log", "--oneline", "-n", "0"]);
+    assert_eq!(out, "", "-n 0 应为空输出: {out:?}");
+
     // 长格式含作者行
     let out = ok(dir, &["log"]);
     assert!(out.contains("Author:"), "{out}");
@@ -484,6 +488,118 @@ fn diff_filters_paths() {
 
     let out = ok(dir, &["diff", "--", "a.txt"]);
     assert!(out.contains("a.txt") && !out.contains("b.txt"), "{out}");
+}
+
+#[test]
+fn diff_cached_conflicts_with_explicit_rev() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a1\n");
+    ok(dir, &["add", "a.txt"]);
+    ok(dir, &["commit", "-m", "c1"]);
+
+    // --cached 与显式修订语义重叠，clap 层直接互斥
+    let se = err(dir, &["diff", "--cached", "HEAD"]);
+    assert!(
+        se.contains("cannot be used with") || se.contains("conflicts"),
+        "got: {se}"
+    );
+    // --staged 是 --cached 的别名，同样互斥
+    let se2 = err(dir, &["diff", "--staged", "HEAD"]);
+    assert!(
+        se2.contains("cannot be used with") || se2.contains("conflicts"),
+        "got: {se2}"
+    );
+}
+
+#[test]
+fn diff_rev_includes_index_added_paths() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a1\n");
+    ok(dir, &["add", "a.txt"]);
+    ok(dir, &["commit", "-m", "c1"]);
+
+    // c1 之后 add 的新文件：进了索引但不在 HEAD 树里。
+    // git 的 `git diff HEAD` 会显示它，riv 也必须显示（曾漏掉索引新增路径）。
+    write(dir, "added.txt", "new\n");
+    ok(dir, &["add", "added.txt"]);
+    let out = ok(dir, &["diff", "HEAD"]);
+    assert!(out.contains("added.txt"), "索引新增文件应出现: {out}");
+    assert!(out.contains("new file"), "应标记为新文件: {out}");
+
+    // 工作区再改一个已跟踪文件：两种差异同时出现
+    write(dir, "a.txt", "a2\n");
+    let out = ok(dir, &["diff", "HEAD"]);
+    assert!(out.contains("added.txt") && out.contains("a.txt"), "{out}");
+}
+
+#[test]
+fn diff_directory_pathspec_matches_prefix() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "src/lib.rs", "fn a() {}\n");
+    write(dir, "src/util/mod.rs", "fn b() {}\n");
+    write(dir, "README.md", "# readme\n");
+    ok(dir, &["add", "."]);
+    ok(dir, &["commit", "-m", "c1"]);
+    write(dir, "src/lib.rs", "fn a2() {}\n");
+    write(dir, "src/util/mod.rs", "fn b2() {}\n");
+    write(dir, "README.md", "# readme2\n");
+
+    // 目录 pathspec：只收 src/ 前缀（含嵌套子目录），不收 README.md
+    let out = ok(dir, &["diff", "--", "src"]);
+    assert!(out.contains("src/lib.rs"), "{out}");
+    assert!(out.contains("src/util/mod.rs"), "{out}");
+    assert!(!out.contains("README.md"), "目录前缀不应收其他文件: {out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_shows_real_modes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "script.sh", "#!/bin/sh\necho hi\n");
+    ok(dir, &["add", "script.sh"]);
+    ok(dir, &["commit", "-m", "c1"]);
+
+    // 内容不变、只加可执行位：输出 old/new mode，无 hunk
+    let abs = dir.join("script.sh");
+    fs::set_permissions(&abs, fs::Permissions::from_mode(0o755)).unwrap();
+    let out = ok(dir, &["diff"]);
+    assert!(out.contains("old mode 100644"), "{out}");
+    assert!(out.contains("new mode 100755"), "{out}");
+    assert!(!out.contains("@@"), "mode-only 变更不应有 hunk: {out}");
+
+    // 新文件带可执行位：new file mode 行反映真实 mode
+    write(dir, "run.sh", "#!/bin/sh\necho run\n");
+    fs::set_permissions(dir.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    ok(dir, &["add", "run.sh"]);
+    let out = ok(dir, &["diff", "--cached"]);
+    assert!(out.contains("new file mode 100755"), "{out}");
+}
+
+#[test]
+fn checkout_create_conflicts_with_paths() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a1\n");
+    ok(dir, &["add", "a.txt"]);
+    ok(dir, &["commit", "-m", "c1"]);
+
+    // -b 建分支与 pathspec 恢复文件是两个互斥意图，clap 层直接报错
+    let se = err(dir, &["checkout", "-b", "feature", "--", "a.txt"]);
+    assert!(
+        se.contains("cannot be used with") || se.contains("conflicts"),
+        "got: {se}"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -89,8 +89,8 @@ enum Command {
         /// 每个提交只显示一行
         #[arg(long)]
         oneline: bool,
-        /// 最多显示 N 条（0 = 不限）
-        #[arg(short = 'n', long, default_value_t = 0)]
+        /// 最多显示 N 条（缺省不限；N=0 输出为空，对齐 git log -n 0）
+        #[arg(short = 'n', long, default_value_t = usize::MAX)]
         max_count: usize,
     },
     /// 管理分支
@@ -114,7 +114,7 @@ enum Command {
         /// 目标：分支名或修订表达式
         target: Option<String>,
         /// 创建并切换到新分支
-        #[arg(short = 'b', long)]
+        #[arg(short = 'b', long, conflicts_with = "paths")]
         create: Option<String>,
         /// 新分支的起始点（配合 -b，缺省 HEAD）
         #[arg(long)]
@@ -130,8 +130,8 @@ enum Command {
     Diff {
         /// 比较的修订：一个 = 与工作区比；两个 = 树间比
         revs: Vec<String>,
-        /// 比较 HEAD 树与索引（--staged 的别名）
-        #[arg(long, alias = "staged")]
+        /// 比较 HEAD 树与索引（--staged 的别名）；与显式修订互斥
+        #[arg(long, alias = "staged", conflicts_with = "revs")]
         cached: bool,
         /// 只显示增删统计
         #[arg(long)]

@@ -120,7 +120,11 @@ impl Object {
         }
         let otype = ObjectType::from_byte(bytes[8])?;
         let payload_len = u64::from_le_bytes(bytes[9..17].try_into().unwrap()) as usize;
-        if bytes.len() != 17 + payload_len {
+        // checked_add：16 位平台上 17 + payload_len 可能溢出 usize
+        let expected = usize::checked_add(17, payload_len).ok_or_else(|| {
+            Error::CorruptObject(format!("payload length too large: {payload_len}"))
+        })?;
+        if bytes.len() != expected {
             return Err(Error::CorruptObject(format!(
                 "payload length mismatch: header says {}, buffer has {}",
                 payload_len,
@@ -209,7 +213,9 @@ impl Tree {
         }
         let count = u32::from_le_bytes(p[..4].try_into().unwrap()) as usize;
         let mut off = 4;
-        let mut entries = Vec::with_capacity(count);
+        // count 来自不可信字节：每个条目至少 38 字节（6 头 + 32 oid），
+        // 按 payload 实际大小钳制预分配，防止损坏数据触发巨额分配。
+        let mut entries = Vec::with_capacity(count.min(p.len() / 38 + 1));
         for _ in 0..count {
             if off + 6 > p.len() {
                 return Err(Error::CorruptObject("tree entry truncated".into()));

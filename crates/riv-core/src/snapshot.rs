@@ -134,7 +134,7 @@ pub fn hash_file(path: &Path) -> Result<(Oid, u64, i64, i32, u32)> {
 }
 
 /// 哈希文件并把 blob 对象写入存储（`add` 的热路径）。
-/// 大文件走流式路径，内存有界。
+/// 大文件走流式路径，内存有界。stat 只做一次（大小直接传给存储层）。
 pub fn hash_and_store(path: &Path, store: &ObjectStore) -> Result<(Oid, u64, i64, i32, u32)> {
     let meta = fs::symlink_metadata(path)?;
     let (size, sec, nsec, mode) = stat_info(path, &meta);
@@ -144,7 +144,7 @@ pub fn hash_and_store(path: &Path, store: &ObjectStore) -> Result<(Oid, u64, i64
             target.to_string_lossy().into_owned().into_bytes(),
         ))?
     } else if size >= (1 << 20) {
-        store.write_blob_file(path)?.0
+        store.write_blob_file_sized(path, size)?.0
     } else {
         let data = fs::read(path)?;
         store.write(&Object::Blob(data))?

@@ -44,6 +44,21 @@ status 与 add 依赖 stat 缓存避免重复读文件；当文件 mtime 秒 ≥
 mtime 秒时（粗粒度时间戳文件系统上的经典竞态），强制重新哈希——与 git 的
 racy-clean 检查一致。
 
+索引格式 v2 的校验和从 FNV-1a 升级为 **blake3 前 8 字节**，并对条目数量设上限
+（防伪造 count 触发预分配 OOM）；v1 文件仍可正常读取。
+
+### 完整性与加固
+
+- **读取即校验**：对象读回后重算 blake3 与寻址 oid 比对，位翻转/坏盘/误写立即
+  报错，对齐 git 松散对象校验
+- **压缩炸弹防护**：zstd 流式解压，上限 4 GiB，超出即拒
+- **分支名校验**：创建/读取/删除全链路拦截 `..`、`~^:?*[`、尾部 `.lock` 等
+  非法名，路径穿越（`refs/heads/../../etc/x`）在构造路径前即被拒绝
+- **修订后缀校验**：`^` / `~` 后仅接受数字，`HEAD^abc` 这类输入报
+  `InvalidRevision` 而非静默忽略
+- **提交完整性**：空仓库且索引为空时 `commit` 拒绝创建空根提交
+  （`--allow-empty` 显式放行）
+
 ### diff：对齐 git xdiff 的 Myers 算法
 
 `riv-diff` 实现了 Myers O(ND) 的**线性空间分治**版本，与 git 的 xdiff 同构：
@@ -54,13 +69,19 @@ racy-clean 检查一致。
 - 成本安全阀 `max(256, sqrt(n+m))`：差异极大时退化为合法但非最小的编辑脚本
   （与 git 的 mxcost 行为一致）
 
-输出为 git 风格 unified diff（`--- a/x` / `+++ b/x` / `@@` hunk）。
+输出为 git 风格 unified diff（`--- a/x` / `+++ b/x` / `@@` hunk），mode 变化
+输出 `old mode` / `new mode` 行（仅 mode 变化时无 hunk）。
 
 ### 性能取向
 
 - **并行哈希**：`add` 用 rayon 并行处理文件，大文件（≥1MB）走 mmap 零拷贝
 - **流式写入**：blob 经 zstd Encoder 边算边写，内存占用与文件大小无关
 - **增量 status**：只重算 stat 缓存失效的路径
+- **惰性检出**：checkout 时索引条目与目标树一致、且工作区经 freshness 校验为
+  干净的文件直接跳过写入，大仓库切换分支不再全量重写；只清理被删文件所在的
+  已空目录，不误删用户自建空目录
+- **单次加载索引**：`diff` 等命令把索引解码一次传入，消除逐路径重复加载的
+  O(n²) IO
 
 ## 跨平台一致性
 
@@ -78,8 +99,8 @@ racy-clean 检查一致。
 
 | 平台 | 编译 | clippy | 测试 |
 |---|---|---|---|
-| Linux x86_64 | ✓ | 0 警告 | 全部通过（167 个：core 122 + CLI 21 + diff 24） |
-| Windows（GNU，wine 运行） | ✓ | 0 警告 | core 118/118 + CLI 21/21（Unix 专属测试按设计排除；Windows 凭据管理器真实生效） |
+| Linux x86_64 | ✓ | 0 警告 | 全部通过（188 个：core 134 + CLI 26 + diff 21 + 最小性属性 7） |
+| Windows（GNU，wine 运行） | ✓ | 0 警告 | core 128/128 + diff 21/21 + 最小性 7/7 + CLI 25/25（Unix 专属测试按设计排除；Windows 凭据管理器真实生效） |
 | Android aarch64（NDK 交叉编译） | ✓ | 0 警告 | 编译级验证（Termux 直接编译同构） |
 
 ## 安装与构建
@@ -91,8 +112,8 @@ riv **不提供预编译二进制**——所有平台使用同一份源码、同
 ### Linux / macOS
 
 ```bash
-tar xzf riv-0.2.0.tar.gz
-cd riv-0.2.0
+tar xzf riv-0.3.0.tar.gz
+cd riv-0.3.0
 cargo build --release        # 产物：target/release/riv
 ```
 
@@ -101,8 +122,8 @@ cargo build --release        # 产物：target/release/riv
 安装 Rust（rustup）+ 任一工具链（MinGW-w64 或 MSVC Build Tools），然后：
 
 ```powershell
-tar xzf riv-0.2.0.tar.gz
-cd riv-0.2.0
+tar xzf riv-0.3.0.tar.gz
+cd riv-0.3.0
 cargo build --release        # 产物：target\release\riv.exe
 ```
 
@@ -110,8 +131,8 @@ cargo build --release        # 产物：target\release\riv.exe
 
 ```bash
 pkg update && pkg install rust clang
-tar xzf riv-0.2.0.tar.gz
-cd riv-0.2.0
+tar xzf riv-0.3.0.tar.gz
+cd riv-0.3.0
 cargo build --release        # 产物：target/release/riv
 ```
 
@@ -147,10 +168,10 @@ riv diff --stat              # 工作区 vs 索引统计
 | `riv add [paths]` | 无参数 = 整个工作区（含删除）；`-u` 只更新已跟踪；`-f` 强制添加被忽略文件；`-n` 预览 |
 | `riv commit -m/-F` | 无信息时回退 `$EDITOR`（非交互环境明确报错而非挂起）；`-a` 等价先 `add -u` |
 | `riv status` | 两列模型（staged/unstaged）+ untracked；`--porcelain` 机器可读 |
-| `riv log` | 第一父链；`--oneline` / `-n N` / `<rev>` 起始 |
-| `riv branch` | 列表 / 创建 / `-d`（未合并拒绝）/ `-D` / `-m` 重命名 |
-| `riv checkout` | `-b` 创建切换；`<branch|rev>` 切换（脏工作区安全检查）；`-- <paths>` 从索引恢复；`<rev> -- <paths>` 从树恢复 |
-| `riv diff` | 默认 index vs 工作区；`--cached` = HEAD vs 索引；`<rev>` = rev vs 工作区；`<rev1> <rev2>` = 树间比；`--stat` |
+| `riv log` | 第一父链；`--oneline` / `-n N` / `<rev>` 起始（`-n 0` 输出为空，对齐 git） |
+| `riv branch` | 列表 / 创建 / `-d`（未合并拒绝）/ `-D` / `-m` 重命名；分支名在创建/读取/删除全链路校验 |
+| `riv checkout` | `-b` 创建切换（与 paths 互斥）；`<branch|rev>` 切换（脏工作区安全检查）；`-- <paths>` 从索引恢复；`<rev> -- <paths>` 从树恢复 |
+| `riv diff` | 默认 index vs 工作区；`--cached` = HEAD vs 索引（与显式 rev 互斥）；`<rev>` = rev vs 工作区（含索引新增路径）；`<rev1> <rev2>` = 树间比；`--stat`；pathspec 支持目录前缀；输出真实 mode（`old mode`/`new mode`） |
 | `riv auth` | `login` 隐藏输入并保存 token / `status` 三来源状态 / `logout` 清除；均支持 `--host` |
 
 ## Token 凭证管理（riv auth）
@@ -176,7 +197,8 @@ riv auth login --host https://git.example.com:8443
 日志与错误输出中的 token 一律打码（保留前 4 后 4）。
 
 修订表达式（revparse）支持：`HEAD`、分支名、oid 前缀（≥4 位十六进制）、
-`^N`（第 N 父）与 `~N`（回溯 N 代）。
+`^N`（第 N 父）与 `~N`（回溯 N 代）。后缀部分仅接受数字，其他字符
+（如 `HEAD^abc`）报 `InvalidRevision`。
 
 ## 项目结构
 
@@ -190,12 +212,12 @@ crates/
 ## 测试
 
 ```bash
-cargo test           # 167 个测试全部通过
+cargo test           # 188 个测试全部通过
 ```
 
-- `riv-core`：122 个单元测试（对象/索引/引用/快照/状态/检出/提交/日志/分支/auth）
-- `riv-diff`：17 个单元测试 + 7 个最小性属性测试（与暴力 DP 对拍）
-- `riv-cli`：21 个端到端集成测试（对真实二进制跑完整命令流，含 auth 全流程）
+- `riv-core`：134 个单元测试（对象/索引/引用/快照/状态/检出/提交/日志/分支/auth）
+- `riv-diff`：21 个单元测试 + 7 个最小性属性测试（与暴力 DP 对拍）
+- `riv-cli`：26 个端到端集成测试（对真实二进制跑完整命令流，含 auth 全流程）
 
 代码质量：`cargo clippy --all-targets` 零警告，`cargo fmt --check` 干净。
 
@@ -206,6 +228,9 @@ cargo test           # 167 个测试全部通过
 
 ## 当前范围与后续
 
-已实现本地核心工作流与 token 凭证层（`riv auth`，0.2.0 新增）。**尚未实现**：
-远程协议（fetch/push/pull，凭证层已就位待对接）、合并（merge）与三方合并、
-对象库垃圾回收、`stash`、交互式 add。
+已实现本地核心工作流与 token 凭证层（`riv auth`，0.2.0 新增），并在 0.3.0 完成
+一轮正确性与健壮性加固：对象读取哈希校验、zstd 解压上限、流式 blob 写入头修复、
+惰性检出（未变化文件不重写）、checkout 原子性与 prune 范围化、索引 v2 校验和、
+分支名/修订后缀全链路校验、diff mode 语义贯通。**尚未实现**：远程协议
+（fetch/push/pull，凭证层已就位待对接）、合并（merge）与三方合并、对象库垃圾
+回收、`stash`、交互式 add。

@@ -700,9 +700,16 @@ pub fn render_hunk(h: &Hunk) -> String {
 
 /// 完整的文件级 diff（git 风格文件头 + hunk）。
 /// `old`/`new` 为 `None` 表示文件不存在（新增/删除）。
+/// `old_mode`/`new_mode` 为 `None` 时按普通文件（100644）展示。
+///
+/// mode 变化（内容相同、仅权限位/类型位不同）输出 git 风格的
+/// `old mode` / `new mode` 行且不带 hunk——这是 chmod +x 类变更的
+/// 标准呈现，此前被硬编码的 `new file mode 100644` 掩盖。
 pub fn format_file_diff(
     path: &str,
+    old_mode: Option<u32>,
     old: Option<&[u8]>,
+    new_mode: Option<u32>,
     new: Option<&[u8]>,
     context: usize,
 ) -> String {
@@ -711,7 +718,7 @@ pub fn format_file_diff(
 
     match (old, new) {
         (None, Some(d)) => {
-            let _ = writeln!(out, "new file mode 100644");
+            let _ = writeln!(out, "new file mode {}", mode_str(new_mode));
             let _ = writeln!(out, "--- /dev/null");
             let _ = writeln!(out, "+++ b/{path}");
             if is_binary(d) {
@@ -725,7 +732,7 @@ pub fn format_file_diff(
             }
         }
         (Some(d), None) => {
-            let _ = writeln!(out, "deleted file mode 100644");
+            let _ = writeln!(out, "deleted file mode {}", mode_str(old_mode));
             let _ = writeln!(out, "--- a/{path}");
             let _ = writeln!(out, "+++ /dev/null");
             if is_binary(d) {
@@ -739,9 +746,22 @@ pub fn format_file_diff(
             }
         }
         (Some(od), Some(nd)) => {
+            let mode_changed = matches!((old_mode, new_mode), (Some(a), Some(b)) if a != b);
+            if od == nd {
+                // 内容相同：仅 mode 变化时输出 mode 行，无 hunk
+                if mode_changed {
+                    let _ = writeln!(out, "old mode {}", mode_str(old_mode));
+                    let _ = writeln!(out, "new mode {}", mode_str(new_mode));
+                }
+                return out;
+            }
             if is_binary(od) || is_binary(nd) {
                 let _ = writeln!(out, "Binary files a/{path} and b/{path} differ");
                 return out;
+            }
+            if mode_changed {
+                let _ = writeln!(out, "old mode {}", mode_str(old_mode));
+                let _ = writeln!(out, "new mode {}", mode_str(new_mode));
             }
             let _ = writeln!(out, "--- a/{path}");
             let _ = writeln!(out, "+++ b/{path}");
@@ -755,6 +775,14 @@ pub fn format_file_diff(
         (None, None) => {}
     }
     out
+}
+
+/// mode 的 git 风格八进制展示（100644 / 100755 / 120000）。
+fn mode_str(mode: Option<u32>) -> String {
+    match mode {
+        Some(m) => format!("{m:o}"),
+        None => "100644".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,20 +1164,94 @@ mod tests {
 
     #[test]
     fn file_diff_new_and_deleted() {
-        let out = format_file_diff("new.txt", None, Some(b"hello\n"), 3);
+        let out = format_file_diff("new.txt", None, None, Some(0o100644), Some(b"hello\n"), 3);
         assert!(out.contains("new file mode 100644"));
         assert!(out.contains("--- /dev/null"));
         assert!(out.contains("+++ b/new.txt"));
         assert!(out.contains("+hello"));
 
-        let out = format_file_diff("old.txt", Some(b"hello\n"), None, 3);
+        let out = format_file_diff("old.txt", Some(0o100644), Some(b"hello\n"), None, None, 3);
         assert!(out.contains("deleted file mode 100644"));
         assert!(out.contains("-hello"));
     }
 
     #[test]
+    fn file_diff_new_file_exec_mode() {
+        // 新增可执行文件：文件头必须反映真实 mode，而非硬编码 100644
+        let out = format_file_diff(
+            "run.sh",
+            None,
+            None,
+            Some(0o100755),
+            Some(b"#!/bin/sh\n"),
+            3,
+        );
+        assert!(out.contains("new file mode 100755"), "{out}");
+    }
+
+    #[test]
+    fn file_diff_mode_only_change() {
+        // chmod +x：内容相同、mode 不同 → git 风格 mode 行，无 hunk
+        let out = format_file_diff(
+            "run.sh",
+            Some(0o100644),
+            Some(b"#!/bin/sh\n"),
+            Some(0o100755),
+            Some(b"#!/bin/sh\n"),
+            3,
+        );
+        assert!(out.contains("old mode 100644"), "{out}");
+        assert!(out.contains("new mode 100755"), "{out}");
+        assert!(!out.contains("@@"), "mode-only diff 不应有 hunk: {out}");
+        assert!(
+            !out.contains("--- a/"),
+            "mode-only diff 不应有 ---/+++: {out}"
+        );
+    }
+
+    #[test]
+    fn file_diff_mode_and_content_change() {
+        // mode 与内容同时变化：mode 行 + hunk 都要有
+        let out = format_file_diff(
+            "run.sh",
+            Some(0o100644),
+            Some(b"a\n"),
+            Some(0o100755),
+            Some(b"b\n"),
+            3,
+        );
+        assert!(out.contains("old mode 100644"), "{out}");
+        assert!(out.contains("new mode 100755"), "{out}");
+        assert!(out.contains("--- a/run.sh"), "{out}");
+        assert!(out.contains("-a"), "{out}");
+        assert!(out.contains("+b"), "{out}");
+    }
+
+    #[test]
+    fn file_diff_same_content_same_mode_is_header_only() {
+        let out = format_file_diff(
+            "f.txt",
+            Some(0o100644),
+            Some(b"x\n"),
+            Some(0o100644),
+            Some(b"x\n"),
+            3,
+        );
+        assert!(out.contains("diff --riv a/f.txt b/f.txt"));
+        assert!(!out.contains("mode"));
+        assert!(!out.contains("@@"));
+    }
+
+    #[test]
     fn file_diff_binary() {
-        let out = format_file_diff("bin", Some(b"a\x00b"), Some(b"c\x00d"), 3);
+        let out = format_file_diff(
+            "bin",
+            Some(0o100644),
+            Some(b"a\x00b"),
+            Some(0o100644),
+            Some(b"c\x00d"),
+            3,
+        );
         assert!(out.contains("Binary files"));
     }
 
