@@ -646,7 +646,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "riv-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "riv-core",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "riv-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "chrono",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "riv-diff"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "rpassword"

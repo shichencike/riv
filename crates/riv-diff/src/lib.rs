@@ -794,6 +794,8 @@ pub struct FileStat {
     pub path: String,
     pub insertions: usize,
     pub deletions: usize,
+    /// 二进制文件：ins/del 恒为 0，按 git 风格显示 `Bin <old> -> <new> bytes`
+    pub binary: Option<(u64, u64)>,
 }
 
 impl FileStat {
@@ -824,17 +826,20 @@ pub fn file_stat(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> Option<F
                 path: path.to_string(),
                 insertions: ins,
                 deletions: del,
+                binary: None,
             })
         }
         (None, Some(nd)) => Some(FileStat {
             path: path.to_string(),
             insertions: split_lines(&String::from_utf8_lossy(nd)).len(),
             deletions: 0,
+            binary: None,
         }),
         (Some(od), None) => Some(FileStat {
             path: path.to_string(),
             insertions: 0,
             deletions: split_lines(&String::from_utf8_lossy(od)).len(),
+            binary: None,
         }),
         (None, None) => None,
     }
@@ -845,14 +850,34 @@ pub fn format_stat(stats: &[FileStat], graph_width: usize) -> String {
     if stats.is_empty() {
         return String::new();
     }
-    let max_total = stats.iter().map(|s| s.total()).max().unwrap_or(0).max(1);
+    let max_total = stats
+        .iter()
+        .filter(|s| s.binary.is_none())
+        .map(|s| s.total())
+        .max()
+        .unwrap_or(0)
+        .max(1);
     let name_width = stats
         .iter()
         .map(|s| s.path.chars().count())
         .max()
         .unwrap_or(0);
+    // 计数列宽 = 最大 total 的位数（git 动态宽度，最小 1）
+    let count_width = max_total.to_string().len().max(1);
     let mut out = String::new();
     for s in stats {
+        // 二进制：git 显示 "Bin X -> Y bytes"，无计数列与增减条
+        if let Some((old_size, new_size)) = s.binary {
+            let _ = writeln!(
+                out,
+                " {:<nw$} | Bin {} -> {} bytes",
+                s.path,
+                old_size,
+                new_size,
+                nw = name_width
+            );
+            continue;
+        }
         let total = s.total();
         // git 语义：最大变更未超界时每个变更行一个字符；超界才按比例缩放到 graph_width
         let (plus, minus) = if max_total > graph_width {
@@ -864,18 +889,14 @@ pub fn format_stat(stats: &[FileStat], graph_width: usize) -> String {
             (s.insertions, s.deletions)
         };
         let bar: String = "+".repeat(plus.min(graph_width)) + &"-".repeat(minus.min(graph_width));
-        let total_disp = if total == 0 {
-            String::new()
-        } else {
-            format!("{}", total)
-        };
         let _ = writeln!(
             out,
-            " {:<nw$} | {:>4} {}",
+            " {:<nw$} | {:>cw$} {}",
             s.path,
-            total_disp,
+            total,
             bar,
-            nw = name_width
+            nw = name_width,
+            cw = count_width
         );
     }
     let files = stats.len();
@@ -886,19 +907,24 @@ pub fn format_stat(stats: &[FileStat], graph_width: usize) -> String {
         files,
         if files == 1 { "" } else { "s" }
     );
-    if ins > 0 {
-        summary.push_str(&format!(
-            ", {} insertion{}(+)",
-            ins,
-            if ins == 1 { "" } else { "s" }
-        ));
-    }
-    if del > 0 {
-        summary.push_str(&format!(
-            ", {} deletion{}(-)",
-            del,
-            if del == 1 { "" } else { "s" }
-        ));
+    if ins > 0 || del > 0 {
+        if ins > 0 {
+            summary.push_str(&format!(
+                ", {} insertion{}(+)",
+                ins,
+                if ins == 1 { "" } else { "s" }
+            ));
+        }
+        if del > 0 {
+            summary.push_str(&format!(
+                ", {} deletion{}(-)",
+                del,
+                if del == 1 { "" } else { "s" }
+            ));
+        }
+    } else {
+        // 有变更但无行增减（二进制 / 仅 mode 变化）：git 显示双零
+        summary.push_str(", 0 insertions(+), 0 deletions(-)");
     }
     let _ = writeln!(out, "{}", summary);
     out
@@ -1262,11 +1288,13 @@ mod tests {
                 path: "a.txt".into(),
                 insertions: 10,
                 deletions: 2,
+                binary: None,
             },
             FileStat {
                 path: "b.txt".into(),
                 insertions: 0,
                 deletions: 5,
+                binary: None,
             },
         ];
         let out = format_stat(&stats, 20);
@@ -1274,6 +1302,40 @@ mod tests {
         assert!(out.contains("2 files changed"));
         assert!(out.contains("10 insertions(+)"));
         assert!(out.contains("7 deletions(-)"));
+    }
+
+    #[test]
+    fn stat_binary_and_zero_counts() {
+        // 二进制文件：Bin 行 + 双零汇总（对齐 git）
+        let stats = vec![FileStat {
+            path: "bin.dat".into(),
+            insertions: 0,
+            deletions: 0,
+            binary: Some((4, 6)),
+        }];
+        let out = format_stat(&stats, 20);
+        assert!(out.contains("bin.dat | Bin 4 -> 6 bytes"), "{out}");
+        assert!(
+            out.contains("1 file changed, 0 insertions(+), 0 deletions(-)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn stat_mode_only_shows_zero() {
+        // 仅 mode 变化（无行增减）：计数列显示 0，汇总双零（对齐 git）
+        let stats = vec![FileStat {
+            path: "s.sh".into(),
+            insertions: 0,
+            deletions: 0,
+            binary: None,
+        }];
+        let out = format_stat(&stats, 20);
+        assert!(out.contains("s.sh | 0"), "{out}");
+        assert!(
+            out.contains("1 file changed, 0 insertions(+), 0 deletions(-)"),
+            "{out}"
+        );
     }
 
     #[test]

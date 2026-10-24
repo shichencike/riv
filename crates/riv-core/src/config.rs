@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// 简单的 INI 解析器：`[section]` + `key = value`，`#`/`;` 注释。
 #[derive(Debug, Clone, Default)]
@@ -122,9 +122,51 @@ impl RepoConfig {
         .to_string()
     }
 
-    pub fn signature_now(&self) -> crate::object::Signature {
-        crate::object::Signature::now(&self.user_name, &self.user_email)
+    /// 当前时间的签名（作者与提交者共用，riv 的 commit 对象中两者相同）。
+    ///
+    /// 身份来源优先级与 git 一致（从高到低）：
+    /// - `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` 环境变量
+    /// - `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` 环境变量
+    /// - config `user.name` / `user.email`
+    /// - 内置默认（`riv` / `riv@localhost`）
+    ///
+    /// 与 git ident.c 一致：环境变量一旦设置（哪怕是空串）就采用其值，
+    /// 不会静默回落 config；最终 name 需通过 git 的 ident 校验
+    /// （crud 后非空），否则拒绝提交。
+    pub fn signature_now(&self) -> Result<crate::object::Signature> {
+        let name = env_ident(&["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"])
+            .unwrap_or_else(|| self.user_name.clone());
+        let email = env_ident(&["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"])
+            .unwrap_or_else(|| self.user_email.clone());
+        // git 的 fmt_ident：空 name 与 crud 后为空的 name 分别报不同的错，
+        // 错误信息里带上最终 email（与 git 逐字一致）。
+        if name.is_empty() {
+            return Err(Error::EmptyIdentName(email));
+        }
+        let crud_name = crud_ident(&name);
+        if crud_name.is_empty() {
+            return Err(Error::BadIdentName(name));
+        }
+        // email 不做非空校验（git 允许空 email），但仍走 crud。
+        Ok(crate::object::Signature::now(
+            &crud_name,
+            &crud_ident(&email),
+        ))
     }
+}
+
+/// git ident.c 的 crud：去掉首尾空白，剔除 `<` `>` `\n`。
+fn crud_ident(s: &str) -> String {
+    s.trim()
+        .chars()
+        .filter(|c| !matches!(c, '<' | '>' | '\n'))
+        .collect()
+}
+
+/// 读取身份类环境变量：返回第一个**已设置**的变量的值（哪怕是空串——
+/// git 对空值 name 会报错而非回落）；都未设置时返回 None。
+fn env_ident(keys: &[&str]) -> Option<String> {
+    keys.iter().filter_map(|k| std::env::var(k).ok()).next()
 }
 
 #[cfg(test)]

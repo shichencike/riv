@@ -112,8 +112,8 @@ riv **不提供预编译二进制**——所有平台使用同一份源码、同
 ### Linux / macOS
 
 ```bash
-tar xzf riv-0.3.0.tar.gz
-cd riv-0.3.0
+tar xzf riv-0.3.1.tar.gz
+cd riv-0.3.1
 cargo build --release        # 产物：target/release/riv
 ```
 
@@ -122,8 +122,8 @@ cargo build --release        # 产物：target/release/riv
 安装 Rust（rustup）+ 任一工具链（MinGW-w64 或 MSVC Build Tools），然后：
 
 ```powershell
-tar xzf riv-0.3.0.tar.gz
-cd riv-0.3.0
+tar xzf riv-0.3.1.tar.gz
+cd riv-0.3.1
 cargo build --release        # 产物：target\release\riv.exe
 ```
 
@@ -131,8 +131,8 @@ cargo build --release        # 产物：target\release\riv.exe
 
 ```bash
 pkg update && pkg install rust clang
-tar xzf riv-0.3.0.tar.gz
-cd riv-0.3.0
+tar xzf riv-0.3.1.tar.gz
+cd riv-0.3.1
 cargo build --release        # 产物：target/release/riv
 ```
 
@@ -226,9 +226,21 @@ cargo test           # 188 个测试全部通过
 双许可：[MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE)，与 `Cargo.toml` 中
 `license = "MIT OR Apache-2.0"` 一致，可任选其一使用。
 
+## 0.3.1：git 行为对齐修复
+
+基于 git-vs-riv 对拍（同一命令序列跑两种实现、归一化输出后 diff）逐条修复的真实分歧：
+
+- **checkout 分离头指针**：`checkout HEAD~1` 等合法 rev 表达式现在走 revparse 进入分离头指针，不再被当成非法分支名拒绝。
+- **`add` 不存在路径**：`add <不存在的路径>` 报 `pathspec did not match any files`（静默成功会误导用户以为已暂存）。多 pathspec 只报第一个，与 git 一致。
+- **`log -n 0` 空仓库**：与 git 一致——无论 `-n` 多少，空仓库都报 `does not have any commits yet`（rc=128）。
+- **`log` 日期格式**：`Date:` 行改为 git 同款 `Sun Jan 5 09:03:07 2020 +0800`（星期/月份英文缩写、日不补零、偏移 `+HHMM`）。
+- **作者身份环境变量**：`GIT_AUTHOR_NAME/EMAIL`（及回落 `GIT_COMMITTER_NAME/EMAIL`）覆盖 config 身份，与 git 优先级一致；空名直接报错而非静默回落（git 语义）。CI 可通过环境变量注入身份。
+- **`commit` 摘要**：补齐 `create mode 100644 <path>` / `delete mode 100644 <path>` 行，与 git 逐字节一致。
+- **`diff --stat` 二进制**：二进制变更显示 `Bin X -> Y bytes`；计数列宽按最大变更量动态计算；全零汇总显示 `0 insertions(+), 0 deletions(-)`。
+
 ## 当前范围与后续
 
-已实现本地核心工作流与 token 凭证层（`riv auth`，0.2.0 新增），并在 0.3.0 完成
+已实现本地核心工作流与 token 凭证层（`riv auth`，0.2.0 新增），并在 0.3.1 完成
 一轮正确性与健壮性加固：对象读取哈希校验、zstd 解压上限、流式 blob 写入头修复、
 惰性检出（未变化文件不重写）、checkout 原子性与 prune 范围化、索引 v2 校验和、
 分支名/修订后缀全链路校验、diff mode 语义贯通。**尚未实现**：远程协议

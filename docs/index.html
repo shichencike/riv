@@ -140,7 +140,7 @@
 <main id="top">
 
 <h1><span class="rev">riv</span> — 分布式版本控制系统</h1>
-<p class="term">v0.3.0 · Rust · MIT OR Apache-2.0</p>
+<p class="term">v0.3.1 · Rust · MIT OR Apache-2.0</p>
 
 <div class="badges">
   <span class="badge">Linux <b>✓</b></span>
@@ -205,8 +205,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
 <span class="c"># 2. 解压源码包并进入目录</span>
-tar xzf riv-0.3.0.tar.gz
-cd riv-0.3.0
+tar xzf riv-0.3.1.tar.gz
+cd riv-0.3.1
 
 <span class="c"># 3. 编译 release 版本</span>
 cargo build --release
@@ -239,8 +239,8 @@ cargo build --release
 </div>
 
 <pre><code><span class="c"># 在 PowerShell / CMD 中（任选上述一种工具链后）</span>
-tar xzf riv-0.3.0.tar.gz
-cd riv-0.3.0
+tar xzf riv-0.3.1.tar.gz
+cd riv-0.3.1
 
 cargo build --release
 
@@ -260,8 +260,8 @@ pkg update
 pkg install rust clang
 
 <span class="c"># 2. 解压源码包（如从其他设备拷贝，放在 $HOME 下，勿放 /sdcard——FAT 无 exec 位）</span>
-tar xzf riv-0.3.0.tar.gz
-cd riv-0.3.0
+tar xzf riv-0.3.1.tar.gz
+cd riv-0.3.1
 
 <span class="c"># 3. 编译（Termux 的 $HOME 位于 ext4/f2fs，exec 位与符号链接均可用，走完整 Unix 语义）</span>
 cargo build --release
@@ -558,7 +558,7 @@ mode 变化输出 <code>old mode</code> / <code>new mode</code> 行（仅 mode �
 
 <h4>支持远程仓库吗？</h4>
 <p>0.2.0 已内置 <strong>token 凭证管理层</strong>（<code>riv auth login/status/logout</code>，环境变量 &gt;
-系统钥匙串 &gt; 本地文件三级存储），0.3.0 完成了本地核心的健壮性加固（对象读取哈希校验、
+系统钥匙串 &gt; 本地文件三级存储），0.3.1 完成了本地核心的健壮性加固（对象读取哈希校验、
 解压上限、惰性检出等），远程协议本身（fetch/push/pull）在路线图上，见下节。</p>
 
 <h4> riv 的文件都存在哪里？</h4>
@@ -577,7 +577,7 @@ mode 变化输出 <code>old mode</code> / <code>new mode</code> 行（仅 mode �
 <!-- ═══════════════ 9. 路线图 ═══════════════ -->
 <section id="roadmap">
 <h2><span class="num">10</span>路线图</h2>
-<p>0.3.0 已实现本地核心工作流与凭证层，并完成健壮性加固。<strong>尚未实现</strong>：</p>
+<p>0.3.1 已实现本地核心工作流与凭证层，并完成健壮性加固。<strong>尚未实现</strong>：</p>
 <ul>
   <li>远程协议（fetch / push / pull）；</li>
   <li>合并（merge）与三方合并；</li>
@@ -585,10 +585,22 @@ mode 变化输出 <code>old mode</code> / <code>new mode</code> 行（仅 mode �
   <li><code>stash</code>；</li>
   <li>交互式 add。</li>
 </ul>
+
+<h3 id="v031">0.3.1：git 行为对齐修复</h3>
+<p>基于 git-vs-riv 对拍（同一命令序列跑两种实现、归一化输出后 diff）逐条修复的真实分歧：</p>
+<ul>
+  <li><strong>checkout 分离头指针</strong>：<code>checkout HEAD~1</code> 等合法 rev 表达式现在走 revparse 进入分离头指针，不再被当成非法分支名拒绝。</li>
+  <li><strong><code>add</code> 不存在路径</strong>：<code>add &lt;不存在的路径&gt;</code> 报 <code>pathspec did not match any files</code>（静默成功会误导用户以为已暂存）。</li>
+  <li><strong><code>log -n 0</code> 空仓库</strong>：与 git 一致——无论 <code>-n</code> 多少都报 <code>does not have any commits yet</code>。</li>
+  <li><strong><code>log</code> 日期格式</strong>：<code>Date:</code> 行改为 git 同款 <code>Sun Jan 5 09:03:07 2020 +0800</code>。</li>
+  <li><strong>作者身份环境变量</strong>：<code>GIT_AUTHOR_NAME/EMAIL</code>（及回落 <code>GIT_COMMITTER_NAME/EMAIL</code>）覆盖 config 身份；空名直接报错而非静默回落。CI 可通过环境变量注入身份。</li>
+  <li><strong><code>commit</code> 摘要</strong>：补齐 <code>create mode 100644 &lt;path&gt;</code> / <code>delete mode 100644 &lt;path&gt;</code> 行，与 git 逐字节一致。</li>
+  <li><strong><code>diff --stat</code> 二进制</strong>：二进制变更显示 <code>Bin X -&gt; Y bytes</code>；计数列宽动态计算；全零汇总显示 <code>0 insertions(+), 0 deletions(-)</code>。</li>
+</ul>
 </section>
 
 <footer>
-  <p>riv v0.3.0 · 用 Rust 编写 · MIT OR Apache-2.0 双许可 · 本页面为离线单文件文档，可直接双击打开或随压缩包分发。</p>
+  <p>riv v0.3.1 · 用 Rust 编写 · MIT OR Apache-2.0 双许可 · 本页面为离线单文件文档，可直接双击打开或随压缩包分发。</p>
 </footer>
 
 </main>

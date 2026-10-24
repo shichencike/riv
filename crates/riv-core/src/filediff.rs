@@ -258,17 +258,20 @@ pub fn render(diffs: &[FileDiff]) -> String {
     out
 }
 
-/// 渲染 `--stat` 风格汇总。
+/// 渲染 `--stat` 风格汇总（含二进制文件的 `Bin X -> Y bytes` 行，对齐 git）。
 pub fn render_stat(diffs: &[FileDiff]) -> String {
     let stats: Vec<riv_diff::FileStat> = diffs
         .iter()
-        .filter(|d| !d.is_binary())
         .map(|d| {
             let (insertions, deletions) = d.stat();
             riv_diff::FileStat {
                 path: d.path.clone(),
                 insertions,
                 deletions,
+                binary: match &d.body {
+                    FileDiffBody::Binary { old_size, new_size } => Some((*old_size, *new_size)),
+                    FileDiffBody::Text { .. } => None,
+                },
             }
         })
         .collect();

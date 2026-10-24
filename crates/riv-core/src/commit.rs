@@ -79,7 +79,7 @@ pub fn commit(repo: &Repo, opts: &CommitOptions) -> Result<CommitOutcome> {
 
     let sig = match &opts.author {
         Some(s) => s.clone(),
-        None => repo.repo_config()?.signature_now(),
+        None => repo.repo_config()?.signature_now()?,
     };
 
     let commit = Commit {
@@ -282,7 +282,10 @@ mod tests {
         assert_eq!(out.commit.author, sig);
         assert_eq!(out.commit.committer, sig);
         // 1_600_000_000 = 2020-09-13 12:26:40 UTC，+0800 本地时间为 20:26:40
-        assert_eq!(out.commit.author.format_time(), "2020-09-13 20:26:40 +0800");
+        assert_eq!(
+            out.commit.author.format_time(),
+            "Sun Sep 13 20:26:40 2020 +0800"
+        );
     }
 
     #[test]

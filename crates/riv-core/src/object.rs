@@ -11,7 +11,7 @@
 
 use crate::error::{Error, Result};
 use crate::oid::{hash_bytes, Oid};
-use chrono::TimeZone;
+use chrono::{Datelike, TimeZone};
 
 pub const MAGIC: &[u8; 8] = b"RIVOBJ\x01\x00";
 
@@ -319,12 +319,24 @@ impl Signature {
         })
     }
 
-    /// 格式化为展示用字符串（含本地时区时间）。
+    /// 格式化为展示用字符串，与 git `Date:` 行逐字节同款：
+    /// `Sun Jan 5 09:03:07 2020 +0800`——星期/月份为英文三字母缩写，
+    /// 日不补零（单空格分隔），时区偏移 `+HHMM`。
     pub fn format_time(&self) -> String {
         let offset_secs = self.tz_offset_minutes * 60;
         match chrono::FixedOffset::east_opt(offset_secs) {
             Some(off) => match off.timestamp_opt(self.seconds, 0).single() {
-                Some(dt) => dt.format("%Y-%m-%d %H:%M:%S %z").to_string(),
+                Some(dt) => format!(
+                    "{} {} {} {:02}:{:02}:{:02} {} {}",
+                    dt.format("%a"),
+                    dt.format("%b"),
+                    dt.day(),
+                    dt.format("%H"),
+                    dt.format("%M"),
+                    dt.format("%S"),
+                    dt.format("%Y"),
+                    dt.format("%z"),
+                ),
                 None => self.seconds.to_string(),
             },
             None => self.seconds.to_string(),
@@ -514,6 +526,18 @@ mod tests {
             tz_offset_minutes: -300,
         };
         // 1_700_000_000 = 2023-11-14 22:13:20 UTC，-0500 时区本地时间为 17:13:20
-        assert_eq!(sig.format_time(), "2023-11-14 17:13:20 -0500");
+        assert_eq!(sig.format_time(), "Tue Nov 14 17:13:20 2023 -0500");
+    }
+
+    #[test]
+    fn signature_time_format_single_digit_day() {
+        // 对齐 git 对个位数日期的处理：日不补零、单空格分隔（`Jan 5` 而非 `Jan  5`）
+        let sig = Signature {
+            name: "n".into(),
+            email: "e".into(),
+            seconds: 1_578_186_187, // 2020-01-05 01:03:07 UTC，+0800 本地时间为 09:03:07
+            tz_offset_minutes: 480,
+        };
+        assert_eq!(sig.format_time(), "Sun Jan 5 09:03:07 2020 +0800");
     }
 }

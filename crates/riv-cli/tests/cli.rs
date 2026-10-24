@@ -907,3 +907,282 @@ fn auth_logout_notes_unsettable_env() {
     let so = String::from_utf8_lossy(&out.stdout);
     assert!(so.contains("unset RIV_TOKEN"), "got: {so}");
 }
+
+// ---------------------------------------------------------------------------
+// 本轮加固新增：git 行为对拍回归
+// ---------------------------------------------------------------------------
+
+#[test]
+fn commit_honors_git_author_env() {
+    // 与 git 一致：GIT_AUTHOR_NAME/EMAIL 覆盖 config 身份（CI 无法改 config
+    // 时这是唯一注入身份的方式）。
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a\n");
+    ok(dir, &["add", "a.txt"]);
+    let out = riv_env(
+        dir,
+        &["commit", "-m", "by env"],
+        &[
+            ("GIT_AUTHOR_NAME", Some("Env Author")),
+            ("GIT_AUTHOR_EMAIL", Some("env@example.com")),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "commit 失败: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = ok(dir, &["log"]);
+    assert!(
+        log.contains("Author: Env Author <env@example.com>"),
+        "env 身份未生效: {log}"
+    );
+}
+
+#[test]
+fn commit_empty_author_env_errors() {
+    // git 语义：环境变量一旦设置（哪怕是空串）就采用其值——空 name 直接
+    // 报错，而不是静默回落 config（否则 CI 里误设空变量会静默产出
+    // 错误身份的提交）。
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a\n");
+    ok(dir, &["add", "a.txt"]);
+    let se = err_env(
+        dir,
+        &["commit", "-m", "empty env"],
+        &[
+            ("GIT_AUTHOR_NAME", Some("")),
+            ("GIT_AUTHOR_EMAIL", Some("")),
+        ],
+    );
+    assert!(
+        se.contains("empty ident name (for <>) not allowed"),
+        "got: {se}"
+    );
+}
+
+#[test]
+fn commit_whitespace_only_author_name_errors() {
+    // 纯空白 name：git 报 "name consists only of disallowed characters"
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a\n");
+    ok(dir, &["add", "a.txt"]);
+    let se = err_env(
+        dir,
+        &["commit", "-m", "ws env"],
+        &[("GIT_AUTHOR_NAME", Some("   "))],
+    );
+    assert!(
+        se.contains("name consists only of disallowed characters"),
+        "got: {se}"
+    );
+}
+
+#[test]
+fn commit_author_env_is_crud_ed() {
+    // git ident.c 的 crud：首尾空白去掉、`<` `>` `\n` 剔除
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a\n");
+    ok(dir, &["add", "a.txt"]);
+    let out = riv_env(
+        dir,
+        &["commit", "-m", "crud"],
+        &[
+            ("GIT_AUTHOR_NAME", Some("  J<o>hn  ")),
+            ("GIT_AUTHOR_EMAIL", Some("  j@x.io  ")),
+        ],
+    );
+    assert!(out.status.success());
+    let log = ok(dir, &["log"]);
+    assert!(
+        log.contains("Author: John <j@x.io>"),
+        "crud 后的身份不符: {log}"
+    );
+}
+
+#[test]
+fn commit_empty_email_env_allowed() {
+    // git 对空 email 不做校验：提交成功，Author 行 email 为空
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a\n");
+    ok(dir, &["add", "a.txt"]);
+    let out = riv_env(
+        dir,
+        &["commit", "-m", "no email"],
+        &[
+            ("GIT_AUTHOR_NAME", Some("No Email")),
+            ("GIT_AUTHOR_EMAIL", Some("")),
+        ],
+    );
+    assert!(out.status.success());
+    let log = ok(dir, &["log"]);
+    assert!(
+        log.contains("Author: No Email <>"),
+        "空 email 应被接受: {log}"
+    );
+}
+
+#[test]
+fn commit_committer_env_fallback() {
+    // 只设 GIT_COMMITTER_* 时同样生效（riv 作者=提交者，取先到者）
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a\n");
+    ok(dir, &["add", "a.txt"]);
+    let out = riv_env(
+        dir,
+        &["commit", "-m", "by committer env"],
+        &[
+            ("GIT_AUTHOR_NAME", None),
+            ("GIT_AUTHOR_EMAIL", None),
+            ("GIT_COMMITTER_NAME", Some("CI Bot")),
+            ("GIT_COMMITTER_EMAIL", Some("ci@example.com")),
+        ],
+    );
+    assert!(out.status.success());
+    let log = ok(dir, &["log"]);
+    assert!(
+        log.contains("Author: CI Bot <ci@example.com>"),
+        "committer env 未生效: {log}"
+    );
+}
+
+#[test]
+fn commit_author_env_beats_committer_env() {
+    // 两者都设时 author 优先（git 优先级：author 变量 > committer 变量）
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a\n");
+    ok(dir, &["add", "a.txt"]);
+    let out = riv_env(
+        dir,
+        &["commit", "-m", "both envs"],
+        &[
+            ("GIT_AUTHOR_NAME", Some("The Author")),
+            ("GIT_AUTHOR_EMAIL", Some("author@example.com")),
+            ("GIT_COMMITTER_NAME", Some("The Committer")),
+            ("GIT_COMMITTER_EMAIL", Some("committer@example.com")),
+        ],
+    );
+    assert!(out.status.success());
+    let log = ok(dir, &["log"]);
+    assert!(
+        log.contains("Author: The Author <author@example.com>"),
+        "author env 应优先: {log}"
+    );
+    assert!(
+        !log.contains("The Committer"),
+        "author env 优先时不应出现 committer 身份: {log}"
+    );
+}
+
+#[test]
+fn log_n_zero_on_empty_repo_errors() {
+    // git：空仓库 `log -n 0` 同样报 does not have any commits yet（rc=128）——
+    // -n 只是上限，不改变「无提交可看」的事实。
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    let se = err(dir, &["log", "-n", "0"]);
+    assert!(se.contains("does not have any commits yet"), "got: {se}");
+}
+
+#[test]
+fn checkout_rev_expression_detaches_head() {
+    // `checkout HEAD~1` 是合法 rev 表达式：必须走 revparse 进入分离头指针，
+    // 而不是被当成非法分支名拒绝（git 行为）。
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a1\n");
+    ok(dir, &["add", "a.txt"]);
+    ok(dir, &["commit", "-m", "c1"]);
+    write(dir, "a.txt", "a2\n");
+    ok(dir, &["add", "a.txt"]);
+    ok(dir, &["commit", "-m", "c2"]);
+
+    let c1 = ok(dir, &["log", "--oneline"]);
+    let c1_oid = c1
+        .lines()
+        .last()
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+    let out = ok(dir, &["checkout", "HEAD~1"]);
+    assert!(out.contains("HEAD is now at"), "分离头指针提示缺失: {out}");
+    assert!(out.contains(c1_oid), "应检出 c1（{c1_oid}）: {out}");
+    // 工作区回到 c1 内容
+    assert_eq!(read(dir, "a.txt"), "a1\n");
+}
+
+#[test]
+fn add_nonexistent_pathspec_errors() {
+    // git：`add <不存在的路径>` 报 fatal pathspec did not match any files。
+    // 静默成功会让用户误以为文件已暂存。
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "real.txt", "r\n");
+    let se = err(dir, &["add", "nope.txt"]);
+    assert!(
+        se.contains("pathspec did not match any files") && se.contains("nope.txt"),
+        "got: {se}"
+    );
+    // 合法路径不受影响（ok 内部已断言成功）
+    ok(dir, &["add", "real.txt"]);
+}
+
+#[test]
+fn commit_summary_shows_create_delete_modes() {
+    // git commit 摘要含 create/delete mode 行（按路径排序）
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    write(dir, "a.txt", "a\n");
+    ok(dir, &["add", "a.txt"]);
+    let out = ok(dir, &["commit", "-m", "c1"]);
+    assert!(
+        out.contains("create mode 100644 a.txt"),
+        "create mode 行缺失: {out}"
+    );
+
+    fs::remove_file(dir.join("a.txt")).unwrap();
+    ok(dir, &["add", "-u"]);
+    let out = ok(dir, &["commit", "-m", "c2"]);
+    assert!(
+        out.contains("delete mode 100644 a.txt"),
+        "delete mode 行缺失: {out}"
+    );
+}
+
+#[test]
+fn diff_stat_binary_shows_bin_line() {
+    // 二进制变更在 --stat 里必须可见（Bin X -> Y bytes），
+    // 静默跳过会让用户以为没有变更。
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    ok(dir, &["init"]);
+    fs::write(dir.join("img.bin"), [0u8, 1, 2, 3]).unwrap();
+    ok(dir, &["add", "img.bin"]);
+    ok(dir, &["commit", "-m", "c1"]);
+    fs::write(dir.join("img.bin"), [0u8, 1, 2, 3, 4, 5, 6, 7]).unwrap();
+    let out = ok(dir, &["diff", "--stat"]);
+    assert!(
+        out.contains("Bin 4 -> 8 bytes"),
+        "二进制 --stat 行缺失: {out}"
+    );
+    assert!(out.contains("img.bin"), "路径缺失: {out}");
+}

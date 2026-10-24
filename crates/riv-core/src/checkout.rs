@@ -63,8 +63,17 @@ pub fn checkout(
         return Err(Error::Msg("checkout: no target specified".into()));
     };
 
-    // 分支优先（与 git 一致：同名分支胜过 oid 前缀）
-    let branch_name = repo.refs().branch_oid(target)?.map(|_| target.to_string());
+    // 分支优先（与 git 一致：同名分支胜过 oid 前缀）。
+    // 探测必须容忍「不是合法分支名」：`HEAD~1`、`HEAD^2` 这类 rev 表达式
+    // 含 `~`/`^`，会被分支名校验拒绝，但它们可能是完全合法的 rev——
+    // 此时应继续走 revparse（git 对 `checkout HEAD~1` 就是分离头指针检出），
+    // 而不是把非法分支名当致命错误。真正的 IO/解析错误仍然上抛。
+    let branch_name = match repo.refs().branch_oid(target) {
+        Ok(Some(_)) => Some(target.to_string()),
+        Ok(None) => None,
+        Err(Error::InvalidRef(_)) => None,
+        Err(e) => return Err(e),
+    };
     let oid = match &branch_name {
         Some(b) => repo.refs().branch_oid(b)?.unwrap(),
         None => crate::revparse::resolve(repo, target)?,

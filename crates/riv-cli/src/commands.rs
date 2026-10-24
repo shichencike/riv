@@ -113,18 +113,42 @@ pub fn commit(
     } else {
         branch
     };
-    let changed = treediff::diff_trees(&repo.store()?, old_tree, Some(out.commit.tree))?.len();
+    let changed = treediff::diff_trees(&repo.store()?, old_tree, Some(out.commit.tree))?;
     println!(
         "[{} {}] {}",
         branch_disp,
         out.oid.short(7),
         out.commit.summary()
     );
-    if changed > 0 {
-        println!(
-            " {changed} file{} changed",
-            if changed == 1 { "" } else { "s" }
-        );
+    if !changed.is_empty() {
+        // diffstat 汇总 + create/delete mode 行（对齐 git commit 摘要：
+        // " 2 files changed, 3 insertions(+), 1 deletion(-)"
+        // " create mode 100644 b.txt" / " delete mode 100644 a.txt"）
+        let store = repo.store()?;
+        let mut diffs = Vec::new();
+        let mut mode_lines: Vec<(String, String)> = Vec::new();
+        for c in &changed {
+            match (c.old, c.new) {
+                (None, Some((_, m))) => {
+                    mode_lines.push((c.path.clone(), format!("create mode {m:o}")));
+                }
+                (Some((_, m)), None) => {
+                    mode_lines.push((c.path.clone(), format!("delete mode {m:o}")));
+                }
+                _ => {}
+            }
+            if let Some(d) = filediff::diff_blobs(&store, &c.path, c.old, c.new)? {
+                diffs.push(d);
+            }
+        }
+        let stat_text = filediff::render_stat(&diffs);
+        if let Some(summary) = stat_text.lines().last() {
+            println!("{summary}");
+        }
+        mode_lines.sort();
+        for (path, line) in mode_lines {
+            println!(" {line} {path}");
+        }
     }
     Ok(())
 }
@@ -274,15 +298,21 @@ pub fn log(rev: Option<&str>, oneline: bool, max_count: usize) -> Result<()> {
     // -n N 直接透传：N=0 表示显示 0 条（对齐 git log -n 0 输出为空、退出 0），
     // 而不是「不限」——省略 -n 才是不限。
     let entries = log_ops::log(&repo, start, Some(max_count))?;
-    if entries.is_empty() && max_count > 0 {
+    // git 语义：当前分支没有任何提交时，无论 -n 多少都报错；
+    // 有提交而 -n 0 只是空输出、退出 0。
+    if entries.is_empty() && (max_count > 0 || repo.refs().resolve_head()?.is_none()) {
         return Err(Error::InvalidRevision(
             "your current branch does not have any commits yet".into(),
         ));
     }
-    for e in &entries {
+    for (i, e) in entries.iter().enumerate() {
         if oneline {
             println!("{} {}", e.oid.short(7), e.commit.summary());
         } else {
+            // 条目之间空行分隔；最后一条之后不补空行（与 git log 一致）
+            if i > 0 {
+                println!();
+            }
             println!("commit {}", e.oid);
             if e.commit.parents.len() > 1 {
                 let parents: Vec<String> = e.commit.parents.iter().map(|p| p.short(7)).collect();
@@ -297,7 +327,6 @@ pub fn log(rev: Option<&str>, oneline: bool, max_count: usize) -> Result<()> {
             for line in e.commit.message.lines() {
                 println!("    {line}");
             }
-            println!();
         }
     }
     Ok(())

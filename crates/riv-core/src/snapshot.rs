@@ -196,6 +196,8 @@ pub fn add(repo: &Repo, opts: &AddOptions) -> Result<AddReport> {
     // 2. 计算目标路径集合与被忽略的显式路径
     let mut targets: BTreeSet<String> = BTreeSet::new();
     let mut ignored: Vec<String> = Vec::new();
+    // 显式 pathspec 中没有任何匹配的（磁盘上没有、也未跟踪）
+    let mut unmatched: Vec<String> = Vec::new();
     // 显式路径中是否包含仓库根（`.` / 仓库目录本身）
     let mut root_requested = false;
     if opts.paths.is_empty() || opts.all {
@@ -258,6 +260,11 @@ pub fn add(repo: &Repo, opts: &AddOptions) -> Result<AddReport> {
             } else if old_paths.contains(&rel_str) {
                 // 已跟踪但已删除 → 暂存删除
                 targets.insert(rel_str);
+            } else {
+                // 磁盘上不存在、也未跟踪：pathspec 没有任何匹配。
+                // git 对此报 fatal pathspec did not match any files；
+                // 静默跳过会让用户误以为文件已暂存（打错文件名时尤其危险）。
+                unmatched.push(rel_str);
             }
         }
         if root_requested {
@@ -273,6 +280,9 @@ pub fn add(repo: &Repo, opts: &AddOptions) -> Result<AddReport> {
                 targets = walked.clone();
             }
         }
+    }
+    if !unmatched.is_empty() {
+        return Err(Error::PathspecNoMatch(unmatched.join(", ")));
     }
     if !ignored.is_empty() {
         return Err(Error::PathIgnored(ignored));
@@ -772,5 +782,27 @@ mod tests {
         let index = repo.index().unwrap();
         assert_eq!(index.entries.len(), 1);
         assert_eq!(index.entries[0].path, "src/a.rs");
+    }
+
+    #[test]
+    fn add_nonexistent_pathspec_errors() {
+        // git 对 `add <不存在的路径>` 报 fatal pathspec did not match any files；
+        // 静默跳过会让用户误以为文件已暂存（打错文件名时尤其危险）。
+        let (dir, repo) = setup_repo();
+        fs::write(dir.path().join("real.txt"), "1").unwrap();
+        let err = add(
+            &repo,
+            &AddOptions {
+                paths: vec![dir.path().join("nope.txt")],
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::PathspecNoMatch(p) => assert_eq!(p, "nope.txt"),
+            other => panic!("expected PathspecNoMatch, got {other:?}"),
+        }
+        // 索引未被污染
+        assert!(repo.index().unwrap().entries.is_empty());
     }
 }

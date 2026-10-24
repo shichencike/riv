@@ -60,6 +60,12 @@ pub enum Error {
     #[error("pathspec did not match any files: {0}")]
     PathspecNoMatch(String),
 
+    #[error("empty ident name (for <{0}>) not allowed")]
+    EmptyIdentName(String),
+
+    #[error("name consists only of disallowed characters: {0}")]
+    BadIdentName(String),
+
     #[error("the following paths are ignored by .rivignore:\n{}", .0.join("\n"))]
     PathIgnored(Vec<String>),
 
